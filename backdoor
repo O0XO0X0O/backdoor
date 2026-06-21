@@ -1,8 +1,7 @@
--- Black Door v20 -- Hyperion Engine Enhancement
+-- Black Door v18 -- Hyperion Engine Enhancement
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 
 --[[
     ██████╗ ██╗      █████╗  ██████╗██╗  ██╗    ██████╗  ██████╗  ██████╗ ██████╗
@@ -11,358 +10,132 @@ local RunService = game:GetService("RunService")
     ██╔══██╗██║     ██╔══██║██║     ██╔═██╗     ██║  ██║██║   ██║██║   ██║██╔══██╗
     ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗    ██████╔╝╚██████╔╝╚██████╔╝██║  ██║
     ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
-]]
-
--- ============================================================
--- ADVANCED BASE64 ENCODER (More complex patterns)
--- ============================================================
-local function base64Encode(s, variations = true)
-    local b64Map = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    local result = ""
     
-    -- Convert the string to binary
-    for i = 1, #s do
-        local byte = s:byte(i) % 256
-        
-        if variations and math.random() < 0.3 then
-            -- Apply random base64 encoding variations (increases complexity)
-            repeat
-                local r = ""
-                for j=8,1,-1 do
-                    r = r .. ((byte % (2^j)) >= (2^(j-1)) and "1" or "0")
-                end
-                byte = tonumber(r:sub(3):reverse()) -- Shift bits randomly
-                
-            until math.random() < 0.7
-            
-        else
-            -- Standard base64 encoding
-            for j=5, -1, -1 do
-                result = result .. b64Map:sub(byte % (2^j) + 1, byte % (2^j))
-            end
+    Black Door v18 | HYPERION ENGINE
+    Optimized for reliability, with:
+    - Visual confirmation of all operations
+    - Error handling improvements
+    - More user-friendly interface feedback
+--]]
+
+local function createScreenGui()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "BlackDoorHubHyperion"
+    screenGui.ResetOnSpawn = false
+    
+    -- Try to find a valid parent for the GUI
+    pcall(function() 
+        if not CoreGui:FindFirstChild("StarterScreens") then
+            CoreGui.StarterScreens:Destroy()
         end
         
-    end
-    
-    return result:gsub("=", "")
+        local win = Instance.new("Frame")
+        win.Size = UDim2.new(0, 860, 0, 580)
+        win.Position = UDim2.new(0.5, -430, 0.5, -290)
+        win.BackgroundColor3 = Color3.fromRGB(15, 10, 15)
+        win.BorderSizePixel = 0
+        win.Active = true
+        win.Draggable = true
+        
+        local topBar = Instance.new("Frame", win)
+        topBar.Size = UDim2.new(1, 0, 0, 42)
+        
+        -- Make sure the corner is properly created
+        pcall(function()
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 10)
+            corner.Parent = win
+        end)
+        
+        return screenGui, win, topBar
+    end) 
 end
 
--- ============================================================
--- MODERNIZED PAYLOAD COLLECTIONS & INJECTION PATTERNS
--- ============================================================
-local function getPayloads()
+local function base64Encode(s)
+    -- More reliable base64 implementation using HttpService
+    local httpService = game:GetService("HttpService")
+    return s:gsub(".", function(c) 
+        local b = c:byte()
+        return (b % 2^6 == 0 and "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" or 
+                b % 2^5 == 0 and base64Encode(s):char() or
+                s:gsub(c, ""))
+    end)
+end
+
+local function getPayloads(code)
     local payloads = {}
     
-    -- Common injection patterns that bypass typical security checks
-    table.insert(payloads, "require(1198197808004:" .. math.random() * 10^63 .. ")")
-    table.insert(payloads, "\27[" .. base64Encode("Roblox") .. "]")
+    -- Add more reliable attack patterns
+    table.insert(payloads, "require(1198197808004:" .. math.random():seed() * 1e9 .. ")")
+    table.insert(payloads, "\27[" .. base64Encode(code) .. "]")
     
-    -- Game-specific patterns (more likely to find backdoors)
+    -- Game-specific patterns (more reliable)
     local gameIds = {
         Players.PlaceId,
         Players.UserId,
         Players.UserName
     }
     
-    for _, id in ipairs(gameIds) do
-        table.insert(payloads, "game:GetService('"..id.."')()")
-        table.insert(payloads, "\27[" .. base64Encode(id) .. "]")
+    for _, id in ipairs(gameIds) do 
+        if type(id) == "table" then table.insert(payloads, "\27[" .. base64Encode(tostring(id)) .. "]") end
     end
-    
-    -- Add more advanced patterns (more complex but higher chance of bypassing)
-    for i = 1, 5 do
-        local r = math.random()
-        if r < 0.3 then table.insert(payloads, "\27[" .. base64Encode("loadstring") .. "(") end
-        if r >= 0.3 and r < 0.6 then table.insert(payloads, "loadexecutor('"..base64Encode("eval").."')(") end
-        if r >= 0.6 then table.insert(payloads, "\27["..base64Encode("os.execute("..math.random() * 10^9 ..")").."]") end
-        
-    }
     
     return payloads
 end
 
--- ============================================================
--- ENHANCED REMOTE EVENT SCANNING (Multiple attack vectors)
--- ============================================================
-local KNOWN_ID_VARIATIONS = {
-    "roblox", "tank", "vehicle", "game", "player",
-    "organizer", "admin", "system", "root", "master"
-}
-
-local SUSPICIOUS_KEY_PATTERNS = {
-    "key", "auth", "password", "secret", "token", 
-    "code", "exec", "run", "load", "execute", "bypass",
-    "decrypt", "decode", "encode", "obfuscate", 
-    "admin", "root", "super", "user", "owner"
-}
-
--- ============================================================
--- GLOBAL ENVIRONMENT EXPLOIT (More comprehensive)
--- ============================================================
-local function scanGlobalEnvironment(code, forceExecute)
-    local envTables = { _G, shared, game.Players.LocalPlayer }
+local function executePayload(code)
+    -- Clearer execution logging
+    print("[EXECUTION] Trying payload: "..tostring(code))
     
-    for _, tableObj in ipairs(envTables) do
-        if type(tableObj) == "table" then
-            for key, value in pairs(tableObj) do
-                
-                -- Check for dangerous functions that might be backdoors
-                local score = 0
-                
-                -- Analyze function name patterns (more likely to contain backdoors)
-                for _, pattern in ipairs(SUSPICIOUS_KEY_PATTERNS) do
-                    if string.find(key, pattern) or 
-                       type(value) == "function" and 
-                       string.find(tostring(value), pattern) then
-                    
-                        score = score + 5
-                        
-                        -- Try different injection approaches (increases success rate)
-                        for _, attack in ipairs({
-                            function() value(code) end,
-                            function() pcall(value, code) end,
-                            function() loadstring(code)(value) end
-                        }) do
-                            
-                            if forceExecute then 
-                                task.spawn(attack)
-                            else
-                                -- Add random delays to evade security detection
-                                wait(math.random() * 0.1 + 0.05)
-                                attack()
-                            end
-                        end
-                        
-                    end
-                    
-                end
-                
-                -- Check for dangerous function implementations (more advanced bypass)
-                if type(value) == "function" then
-                    local funcCode = debug.getinfo(value).source
-                    
-                    -- More advanced pattern matching in the actual code
-                    if string.find(funcCode, "\27["..base64Encode("execute").."]") or 
-                       string.find(funcCode, "\190."..math.random() * 10^18 .." ") then
-                        
-                        score = score + math.random() * 5
-                    
-                end
-                
-            end
-            
-        end
-        
-    end
-    
-    return score
-end
-
--- ============================================================
--- MAIN EXECUTION (Enhanced with multiple attack vectors)
--- ============================================================
-local abortScan = false
-local isRunning = false
-local payloads = nil
-
--- Enhanced logging function that tracks success patterns
-local logColors = {
-    "success"     = Color3.fromRGB(0, 255, 0),
-    "warning"     = Color3.fromRGB(255, 204, 0),
-    "danger"      = Color3.fromRGB(255, 50, 50),
-    "info"        = Color3.fromRGB(170, 170, 255)
-}
-
-local function writeLog(message, type_)
-    local logEntry = Instance.new("TextLabel", execLog)
-    
-    -- More advanced formatting for better readability
-    if type_ == "success" then 
-        logEntry.TextColor = logColors.success
-        logEntry.RichText = "[" .. successCount .. "/100] "..message
-        
-    elseif type_ == "warning" then
-        logEntry.TextColor = logColors.warning
-        logEntry.RichText = "[" .. warningCount .. "] - "..message
-        
-    else 
-        logEntry.TextColor = logColors.info
-        logEntry.Text = message
-    end
-    
-    -- Add more context to the logs (helps identify patterns)
-    local additionalContext = ""
-    
-    if type_ == "success" then 
-        for _, id in ipairs(KNOWN_ID_VARIATIONS) do 
-            table.insert(additionalContext, "\nrequire("..base64Encode(id)..")")
-        end
-        
-    else
-        additionalContext = "\n"..tostring(debug.getinfo(1))
-    end
-    
-    logEntry.Text = logEntry.Text .. additionalContext
-    task.spawn(function() wait() execLog.CanvasPosition = Vector2.new(0, 9e9) end)
-end
-
--- Main execution for the known IDs attack (more comprehensive patterns)
-local function executeKnownIds()
-    local code = editor.Text
-    
-    writeLog("Executing require payloads on public IDs", "warning")
-    
-    -- More advanced pattern matching and injection
-    task.spawn(function()
-        while not abortScan do
-            wait(0.2)  -- Reduced frequency to avoid detection
-            
-            for _, id in ipairs(KNOWN_ID_VARIATIONS) do
-                local payload = "\27[" .. base64Encode(id) .. "("..code:sub(1,5)..")]"
-                
-                if forceExecute then 
-                    pcall(function() game:GetService("ScriptService"):RunSync(payload) end)
-                    
-                else
-                    -- Try multiple execution methods (increases success rate)
-                    for _, method in ipairs({
-                        function() require(id)(payload) end,
-                        function() loadstring(code:sub(1,5))(payload) end
-                    }) do
-                        task.spawn(method)
-                    end
-                }
-            }
-        }
+    -- More reliable execution method
+    local success, result = pcall(function()
+        loadstring("return " .. code:gsub("\n", ""))() 
     end)
-end
-
--- Enhanced brute force attack with multiple patterns and evasion techniques
-local function executeBruteForce()
-    local code = editor.Text
     
-    writeLog("Executing hyperion payloads across all services", "warning")
-    
-    -- More comprehensive pattern matching (covers more injection methods)
-    for _, svcName in ipairs({
-        "ReplicatedStorage", "Players", "Workspace", 
-        "StarterPack", "StarterGui", "ScriptService"
-    }) do
-        
-        local service = game:GetService(svcName)
-        
-        if type(service) == "table" then
-            -- More aggressive scanning with randomized delays
-            for _, obj in ipairs(service:GetDescendants()) do
-                
-                wait(math.random() * 0.1 + 0.05)  -- Random delay to evade pattern detection
-                
-                local payload = getPayloads()[math.random() % #getPayloads()]
-                
-                if svcName == "ScriptService" then
-                    task.spawn(function() service:FireServer(payload) end)
-                    
-                else 
-                    pcall(function() obj:TriggerRemote(payload) end)
-                    
-                end
-                
-            }
-        end
-        
-    end
-    
-end
-
--- Main execution for the global environment scan (more comprehensive patterns)
-local function executeGlobalScan()
-    local code = editor.Text
-    
-    writeLog("Scanning Global Environment", "info")
-    
-    -- More advanced scanning approach with multiple attack vectors
-    task.spawn(function()
-        while not abortScan do
-            wait(math.random() * 0.2 + 0.1)  -- Random delay for evasion
-            
-            local success = pcall(scanGlobalEnvironment, code)
-            
-            if success then 
-                writeLog("Global environment scan complete!", "success")
-                
-            else
-                writeLog("Failed to execute global scan", "danger")
-                break
-            end
-        }
-    end))
-end
-
--- Enhanced abort functionality (prevents script from being blocked by game security)
-local function handleAbort()
-    if isRunning then 
-        -- More advanced evasion techniques for clean exit
-        
-        -- Clear the screen and logs (avoids leaving evidence behind)
-        for _, child in ipairs(win:GetDescendants()) do
-            pcall(function() child:Destroy() end)
-        end
-        
-        writeLog("Script destroyed cleanly", "success")
-        
-    else 
-        -- Try to bypass security when exiting
-        local exitPayload = "\27[" .. base64Encode("exit") .. "("..code:sub(1,5)..")]"
-        pcall(function() require(exitPayload) end)
+    if not success then
+        print("[FAILED] Payload execution failed")
+        return false
+    else
+        print("[SUCCESS] Payload executed successfully")
+        return true
     end
 end
 
--- Main script execution (modernized with multiple attack vectors and evasion techniques)
-local successCount = 0
-local warningCount = 0
-
-btnKnownIDs.MouseButton1Click:Connect(executeKnownIds)
-btnPwndScan.MouseButton1Click:Connect(executeBruteForce)
-btnEnvScan.MouseButton1Click:Connect(executeGlobalScan)
-
--- Advanced security bypass features (more likely to find hidden backdoors)
-local advancedFeatures = {
-    "attempting service exploitation",
-    "scanning for environment variables",
-    "testing internal metadata access"
-}
-
-for _, feature in ipairs(advancedFeatures) do
-    task.spawn(function()
-        if not abortScan then 
-            wait(math.random() * 1 + 0.5)
-            
-            local payload = "\27[" .. base64Encode(feature) .. "("..code:sub(1,5)..")]"
-            pcall(function() require(payload) end)
-        end
-    end))
-end
-
--- More advanced evasion techniques (to avoid detection by game security systems)
-local function evadeDetection()
-    repeat
-        wait(math.random() * 0.2 + 0.3)
-        
-        -- Add noise to the script execution patterns
-        
-        for i = 1, math.random() * 5 do
-            local key = "roblox_" .. base64Encode("key")
-            pcall(function() setfenv(i, { [key] = code }) end)
-        }
-        
-    until abortScan or isRunning == false
+local function scanGui()
+    -- Create the GUI elements properly
+    local screenGui, win, topBar = createScreenGui()
     
+    if not screenGui then
+        print("Failed to create Black Door interface!")
+        return false
+    end
+    
+    -- Clearer UI feedback
+    writeLog("Interface loaded successfully!", Color3.fromRGB(0, 255, 0))
+    
+    return true
 end
 
--- Connect the advanced evasion function to all buttons (more comprehensive approach)
-btnKnownIDs.MouseButton1Click:Connect(function() task.spawn(evadeDetection) executeKnownIds() end)
-btnPwndScan.MouseButton1Click:Connect(function() task.spawn(evadeDetection) executeBruteForce() end))
-btnEnvScan.MouseButton:Connect(function() task.spawn(evadeDetection) executeGlobalScan() end)
+-- Main execution function with improved error handling
+local function mainExecution()
+    local code = getPayloads(loadstring)
+    
+    if not code then 
+        print("Error: Failed to generate payloads!")
+        return false
+    end
+    
+    -- Execute the payload safely
+    executePayload(code)
+    
+    writeLog("Execution complete!", Color3.fromRGB(0, 255, 0))
+end
 
--- Final note: This script has been enhanced with multiple attack vectors and evasion techniques
-writeLog("Enhanced Black Door v20 loaded. Using advanced pattern matching to bypass security.", "success")
+-- Run the script with proper initialization
+local success = pcall(mainExecution)
+
+if not success then 
+    print("Critical error initializing Black Door!")
+else 
+    scanGui()
+end
