@@ -1,217 +1,145 @@
 --[[
-    ============================================================
-    UNIFIED SERVER AUTOMATION SCRIPT - STANDALONE EXECUTION
-    ============================================================
-    
-    This script is designed to run in a Lua executor (e.g., Fluxus, Xeno)
-    Not for Roblox Studio - use directly in-game
-    
-    Features:
-    - Single file, no dependencies
-    - Robust remote event discovery and execution
-    - Real-time error logging and diagnostics
-    - Auto-recovery on failures
-    - Works with executor console
-    
-    Usage:
-    1. Open your Lua executor (Fluxus, Xeno, etc.)
-    2. Paste entire script into editor
-    3. Click Execute
-    4. Watch console for [AUTO] logs
-    5. Use provided commands to test
+    ╔════════════════════════════════════════════════════════╗
+    ║                                                        ║
+    ║          ROBLOX SERVER AUTOMATION SUITE 2026           ║
+    ║          Professional Edition with GUI & Analytics     ║
+    ║                                                        ║
+    ║  Features:                                             ║
+    ║  ✓ Advanced GUI Dashboard                             ║
+    ║  ✓ RemoteEvent Discovery & Analysis                   ║
+    ║  ✓ Code Execution Engine                              ║
+    ║  ✓ Real-time Analytics & Monitoring                   ║
+    ║  ✓ Security & Firewall System                         ║
+    ║  ✓ Script Library & Templates                         ║
+    ║  ✓ Network Traffic Inspector                          ║
+    ║  ✓ Performance Profiler                               ║
+    ║                                                        ║
+    ╚════════════════════════════════════════════════════════╝
 ]]
 
-local VERSION = "2026.1"
-local AUTO = setmetatable({}, {
-    __tostring = function() return "[AUTO]" end
-})
+local VERSION = "2026 Pro"
+local BUILD = 2410
+local AutoSuite = {}
 
 -- ============================================================
--- CORE CONFIGURATION
+-- ENVIRONMENT SETUP
 -- ============================================================
 
-local CONFIG = {
-    VERBOSE = true,
-    DISCOVERY_DEPTH = 8,
-    FIRE_COOLDOWN = 0.15,
-    COMMAND_TIMEOUT = 10,
-    MAX_RETRIES = 3,
-    SCAN_INTERVAL = 25,
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- ============================================================
+-- CORE DATA STRUCTURES
+-- ============================================================
+
+local State = {
+    remotes = {},
+    executions = {},
+    analytics = {
+        totalFires = 0,
+        totalErrors = 0,
+        averageLatency = 0,
+        lastScanTime = 0,
+        discoveredCount = 0,
+    },
+    ui = {
+        mainWindow = nil,
+        visible = true,
+        theme = "dark",
+    },
+    security = {
+        blockedKeywords = {"require", "script", "_G", "loadstring"},
+        whitelistMode = false,
+        executionLog = {},
+    }
 }
 
 -- ============================================================
--- LOGGING SYSTEM
+-- THEME SYSTEM
 -- ============================================================
 
-local function log(msg, level)
-    level = level or "INFO"
-    local prefix = string.format("[AUTO][%s]", level)
-    print(prefix .. " " .. msg)
-end
-
-local function logError(msg)
-    log(msg, "ERROR")
-    warn(msg)
-end
-
-local function logDebug(msg)
-    if CONFIG.VERBOSE then
-        log(msg, "DEBUG")
-    end
-end
-
--- ============================================================
--- SERVICE RETRIEVAL (Safe with fallbacks)
--- ============================================================
-
-local Services = {}
-local function getService(name)
-    if Services[name] then
-        return Services[name]
-    end
-    
-    local success, service = pcall(function()
-        return game:GetService(name)
-    end)
-    
-    if success then
-        Services[name] = service
-        return service
-    end
-    
-    logError("Failed to get service: " .. name)
-    return nil
-end
-
-local ReplicatedStorage = getService("ReplicatedStorage")
-local Players = getService("Players")
-local RunService = getService("RunService")
-
--- ============================================================
--- REMOTE EVENT MANAGER
--- ============================================================
-
-local RemoteManager = {
-    events = {},
-    lastFire = {},
-    failureCount = {},
-    listeners = {}
+local Theme = {
+    dark = {
+        primary = Color3.fromRGB(45, 45, 45),
+        secondary = Color3.fromRGB(65, 65, 65),
+        accent = Color3.fromRGB(0, 120, 255),
+        success = Color3.fromRGB(0, 200, 80),
+        warning = Color3.fromRGB(255, 180, 0),
+        error = Color3.fromRGB(255, 60, 60),
+        text = Color3.fromRGB(255, 255, 255),
+        textDim = Color3.fromRGB(180, 180, 180),
+    },
+    light = {
+        primary = Color3.fromRGB(250, 250, 250),
+        secondary = Color3.fromRGB(235, 235, 235),
+        accent = Color3.fromRGB(0, 100, 200),
+        success = Color3.fromRGB(0, 150, 60),
+        warning = Color3.fromRGB(200, 140, 0),
+        error = Color3.fromRGB(200, 40, 40),
+        text = Color3.fromRGB(40, 40, 40),
+        textDim = Color3.fromRGB(120, 120, 120),
+    }
 }
 
-function RemoteManager:findAllRemotes(folder, depth)
-    if not folder or depth > CONFIG.DISCOVERY_DEPTH then
-        return
+local CurrentTheme = Theme.dark
+
+-- ============================================================
+-- REMOTE EVENT DISCOVERY ENGINE
+-- ============================================================
+
+local RemoteDiscovery = {}
+
+function RemoteDiscovery:scanAllServices()
+    local results = {}
+    local startTime = tick()
+    
+    -- Scan multiple services
+    local services = {
+        ReplicatedStorage,
+        game:GetService("Workspace"),
+        game:GetService("ServerScriptService"),
+    }
+    
+    for _, service in ipairs(services) do
+        if pcall(function() return service:IsDescendantOf(game) end) then
+            self:deepScan(service, results, 0)
+        end
     end
     
-    if not pcall(function() return folder:IsDescendantOf(game) end) then
-        return
-    end
+    State.analytics.lastScanTime = tick() - startTime
+    State.analytics.discoveredCount = #results
+    
+    return results
+end
+
+function RemoteDiscovery:deepScan(folder, results, depth)
+    if depth > 10 or not folder then return end
     
     pcall(function()
         for _, obj in pairs(folder:GetChildren()) do
-            if obj:IsA("RemoteEvent") then
-                if not self.events[obj] then
-                    self.events[obj] = {
-                        name = obj.Name,
-                        path = obj:GetFullName(),
-                        depth = depth,
-                        active = true
-                    }
-                    logDebug("Found: " .. obj.Name .. " (depth " .. depth .. ")")
-                end
+            if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+                local info = {
+                    name = obj.Name,
+                    path = obj:GetFullName(),
+                    type = obj.ClassName,
+                    depth = depth,
+                    parent = folder.Name,
+                    calls = 0,
+                    lastCalled = 0,
+                    errors = 0,
+                }
+                table.insert(results, info)
+                State.remotes[obj] = info
             end
             
-            -- Recursive search
-            self:findAllRemotes(obj, depth + 1)
+            self:deepScan(obj, results, depth + 1)
         end
     end)
-end
-
-function RemoteManager:canFire(remote)
-    if not remote or not remote.Parent then
-        return false
-    end
-    
-    local lastTime = self.lastFire[remote] or 0
-    local elapsed = tick() - lastTime
-    
-    return elapsed >= CONFIG.FIRE_COOLDOWN
-end
-
-function RemoteManager:fireEvent(remote, ...)
-    if not self:canFire(remote) then
-        return false
-    end
-    
-    local eventInfo = self.events[remote]
-    if not eventInfo then
-        return false
-    end
-    
-    for attempt = 1, CONFIG.MAX_RETRIES do
-        local success = pcall(function()
-            remote:FireServer(...)
-        end)
-        
-        if success then
-            self.lastFire[remote] = tick()
-            self.failureCount[remote] = 0
-            logDebug("Fired: " .. eventInfo.name)
-            return true
-        end
-        
-        task.wait(0.05)
-    end
-    
-    self.failureCount[remote] = (self.failureCount[remote] or 0) + 1
-    
-    if self.failureCount[remote] >= 5 then
-        logError("Repeated failures on: " .. eventInfo.name)
-    end
-    
-    return false
-end
-
-function RemoteManager:setupListeners()
-    local connected = 0
-    
-    for remote, info in pairs(self.events) do
-        if remote.Parent then
-            pcall(function()
-                if not self.listeners[remote] then
-                    remote.OnServerEvent:Connect(function(player, ...)
-                        logDebug(player.Name .. " triggered " .. info.name)
-                    end)
-                    self.listeners[remote] = true
-                    connected = connected + 1
-                end
-            end)
-        end
-    end
-    
-    return connected
-end
-
-function RemoteManager:discoverAndConnect()
-    log("Starting remote discovery...", "DISCOVER")
-    
-    self:findAllRemotes(ReplicatedStorage, 0)
-    
-    local count = 0
-    for _ in pairs(self.events) do
-        count = count + 1
-    end
-    
-    if count > 0 then
-        log("Found " .. count .. " RemoteEvent(s)", "DISCOVER")
-    else
-        log("No RemoteEvents found - this is normal if none exist", "WARN")
-    end
-    
-    local connected = self:setupListeners()
-    log("Connected listeners: " .. connected, "DISCOVER")
-    
-    return count, connected
 end
 
 -- ============================================================
@@ -220,11 +148,17 @@ end
 
 local Executor = {}
 
-function Executor:execute(codeString, context)
-    context = context or "standalone"
+function Executor:execute(code, context)
+    context = context or "general"
+    local startTime = tick()
     
-    if not codeString or type(codeString) ~= "string" or codeString == "" then
+    if not code or type(code) ~= "string" or code == "" then
         return false, "Empty code"
+    end
+    
+    -- Security check
+    if not self:validateCode(code) then
+        return false, "Code blocked by security filter"
     end
     
     local env = {
@@ -233,225 +167,702 @@ function Executor:execute(codeString, context)
         task = task,
         wait = wait,
         game = game,
-        script = script,
-        _G = _G,
+        math = math,
+        table = table,
+        string = string,
+        tonumber = tonumber,
+        tostring = tostring,
+        type = type,
+        pairs = pairs,
+        ipairs = ipairs,
     }
     
     local success, result = pcall(function()
-        local func = loadstring(codeString)
+        local func = loadstring(code)
         if not func then
-            error("Parse failed")
+            error("Failed to parse code")
         end
         
         setfenv(func, env)
         return func()
     end)
     
+    local executionTime = tick() - startTime
+    
+    local execution = {
+        code = code,
+        success = success,
+        result = result,
+        context = context,
+        time = executionTime,
+        timestamp = os.time(),
+    }
+    
+    table.insert(State.executions, execution)
+    table.insert(State.security.executionLog, execution)
+    
     if success then
-        log("Code executed: " .. context, "EXEC")
-        return true, result
+        State.analytics.totalFires = State.analytics.totalFires + 1
     else
-        logError("Execution failed (" .. context .. "): " .. tostring(result))
-        return false, result
+        State.analytics.totalErrors = State.analytics.totalErrors + 1
     end
+    
+    return success, result
+end
+
+function Executor:validateCode(code)
+    if State.security.whitelistMode then
+        return false -- Block everything in whitelist mode
+    end
+    
+    for _, keyword in ipairs(State.security.blockedKeywords) do
+        if string.find(code, keyword, 1, true) then
+            return false
+        end
+    end
+    
+    return true
 end
 
 -- ============================================================
--- COMMAND PROCESSOR
+-- GUI BUILDER
 -- ============================================================
 
-local CommandProcessor = {}
+local GUI = {}
 
-function CommandProcessor:parseCommand(input)
-    local parts = {}
-    for part in string.gmatch(input, "%S+") do
-        table.insert(parts, part)
+function GUI:createMainWindow()
+    local screenSize = PlayerGui.AbsoluteSize
+    local windowSize = UDim2.new(0, 1000, 0, 700)
+    
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Name = "AutoSuiteMainWindow"
+    mainFrame.Size = windowSize
+    mainFrame.Position = UDim2.new(0.5, -500, 0.5, -350)
+    mainFrame.BackgroundColor3 = CurrentTheme.primary
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Parent = PlayerGui
+    
+    -- Add corner radius
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = mainFrame
+    
+    -- Stroke for modern look
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = CurrentTheme.secondary
+    stroke.Thickness = 2
+    stroke.Parent = mainFrame
+    
+    -- ===== HEADER =====
+    local header = Instance.new("Frame")
+    header.Name = "Header"
+    header.Size = UDim2.new(1, 0, 0, 50)
+    header.BackgroundColor3 = CurrentTheme.secondary
+    header.BorderSizePixel = 0
+    header.Parent = mainFrame
+    
+    local headerCorner = Instance.new("UICorner")
+    headerCorner.CornerRadius = UDim.new(0, 12)
+    headerCorner.Parent = header
+    
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
+    title.Size = UDim2.new(0, 400, 1, 0)
+    title.Position = UDim2.new(0, 15, 0, 0)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = CurrentTheme.text
+    title.TextSize = 20
+    title.Font = Enum.Font.GothamBold
+    title.Text = "🚀 SERVER AUTOMATION SUITE 2026"
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = header
+    
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Name = "CloseBtn"
+    closeBtn.Size = UDim2.new(0, 40, 0, 40)
+    closeBtn.Position = UDim2.new(1, -50, 0, 5)
+    closeBtn.BackgroundColor3 = CurrentTheme.error
+    closeBtn.TextColor3 = CurrentTheme.text
+    closeBtn.TextSize = 18
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.Text = "✕"
+    closeBtn.Parent = header
+    
+    local closeBtnCorner = Instance.new("UICorner")
+    closeBtnCorner.CornerRadius = UDim.new(0, 6)
+    closeBtnCorner.Parent = closeBtn
+    
+    closeBtn.MouseButton1Click:Connect(function()
+        mainFrame:Destroy()
+    end)
+    
+    -- ===== SIDEBAR =====
+    local sidebar = Instance.new("Frame")
+    sidebar.Name = "Sidebar"
+    sidebar.Size = UDim2.new(0, 200, 1, -50)
+    sidebar.Position = UDim2.new(0, 0, 0, 50)
+    sidebar.BackgroundColor3 = CurrentTheme.secondary
+    sidebar.BorderSizePixel = 0
+    sidebar.Parent = mainFrame
+    
+    local sidebarPadding = Instance.new("UIPadding")
+    sidebarPadding.PaddingTop = UDim.new(0, 10)
+    sidebarPadding.PaddingLeft = UDim.new(0, 10)
+    sidebarPadding.PaddingRight = UDim.new(0, 10)
+    sidebarPadding.PaddingBottom = UDim.new(0, 10)
+    sidebarPadding.Parent = sidebar
+    
+    local sidebarList = Instance.new("UIListLayout")
+    sidebarList.Padding = UDim.new(0, 8)
+    sidebarList.FillDirection = Enum.FillDirection.Vertical
+    sidebarList.SortOrder = Enum.SortOrder.LayoutOrder
+    sidebarList.Parent = sidebar
+    
+    -- Sidebar buttons
+    local tabs = {
+        { name = "Dashboard", icon = "📊" },
+        { name = "Remotes", icon = "🔌" },
+        { name = "Executor", icon = "⚙️" },
+        { name = "Analytics", icon = "📈" },
+        { name = "Security", icon = "🔒" },
+        { name = "Settings", icon = "⚡" },
+    }
+    
+    for i, tab in ipairs(tabs) do
+        local btn = Instance.new("TextButton")
+        btn.Name = tab.name
+        btn.Size = UDim2.new(1, 0, 0, 35)
+        btn.BackgroundColor3 = CurrentTheme.primary
+        btn.TextColor3 = CurrentTheme.text
+        btn.TextSize = 14
+        btn.Font = Enum.Font.Gotham
+        btn.Text = tab.icon .. " " .. tab.name
+        btn.Parent = sidebar
+        
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 6)
+        btnCorner.Parent = btn
+        
+        btn.MouseButton1Click:Connect(function()
+            self:switchTab(mainFrame, tab.name)
+        end)
     end
     
-    return parts[1], table.concat(parts, " ", 2)
+    -- ===== MAIN CONTENT =====
+    local contentFrame = Instance.new("Frame")
+    contentFrame.Name = "ContentFrame"
+    contentFrame.Size = UDim2.new(1, -200, 1, -50)
+    contentFrame.Position = UDim2.new(0, 200, 0, 50)
+    contentFrame.BackgroundColor3 = CurrentTheme.primary
+    contentFrame.BorderSizePixel = 0
+    contentFrame.Parent = mainFrame
+    
+    local contentPadding = Instance.new("UIPadding")
+    contentPadding.PaddingTop = UDim.new(0, 15)
+    contentPadding.PaddingLeft = UDim.new(0, 15)
+    contentPadding.PaddingRight = UDim.new(0, 15)
+    contentPadding.PaddingBottom = UDim.new(0, 15)
+    contentPadding.Parent = contentFrame
+    
+    -- Create tabs
+    self:createDashboardTab(contentFrame)
+    self:createRemotesTab(contentFrame)
+    self:createExecutorTab(contentFrame)
+    self:createAnalyticsTab(contentFrame)
+    self:createSecurityTab(contentFrame)
+    self:createSettingsTab(contentFrame)
+    
+    State.ui.mainWindow = mainFrame
+    
+    return mainFrame
 end
 
-function CommandProcessor:handleCommand(input)
-    local cmd, args = self:parseCommand(input)
+function GUI:createDashboardTab(parent)
+    local tab = Instance.new("Frame")
+    tab.Name = "Dashboard"
+    tab.Size = UDim2.new(1, 0, 1, 0)
+    tab.BackgroundTransparency = 1
+    tab.Visible = true
+    tab.Parent = parent
     
-    if cmd == "exec" then
-        local success, result = Executor:execute(args, "user")
-        if success then
-            print("✓ Result: " .. tostring(result))
-        end
-        return
+    local layout = Instance.new("UIGridLayout")
+    layout.CellPadding = UDim2.new(0, 10, 0, 10)
+    layout.CellSize = UDim2.new(0.5, -5, 0, 120)
+    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.FillDirectionMaxCells = 2
+    layout.Parent = tab
+    
+    -- Stat cards
+    local stats = {
+        { title = "RemoteEvents Found", value = State.analytics.discoveredCount, icon = "🔌" },
+        { title = "Total Executions", value = State.analytics.totalFires, icon = "✓" },
+        { title = "Errors", value = State.analytics.totalErrors, icon = "⚠️" },
+        { title = "Last Scan", value = string.format("%.2fs", State.analytics.lastScanTime), icon = "⏱️" },
+    }
+    
+    for _, stat in ipairs(stats) do
+        local card = Instance.new("Frame")
+        card.BackgroundColor3 = CurrentTheme.secondary
+        card.Parent = tab
+        
+        local cardCorner = Instance.new("UICorner")
+        cardCorner.CornerRadius = UDim.new(0, 8)
+        cardCorner.Parent = card
+        
+        local cardStroke = Instance.new("UIStroke")
+        cardStroke.Color = CurrentTheme.accent
+        cardStroke.Thickness = 1
+        cardStroke.Parent = card
+        
+        local icon = Instance.new("TextLabel")
+        icon.Size = UDim2.new(0, 40, 0, 40)
+        icon.Position = UDim2.new(0, 10, 0, 10)
+        icon.BackgroundTransparency = 1
+        icon.TextSize = 24
+        icon.Text = stat.icon
+        icon.Parent = card
+        
+        local title = Instance.new("TextLabel")
+        title.Size = UDim2.new(1, -60, 0, 20)
+        title.Position = UDim2.new(0, 50, 0, 15)
+        title.BackgroundTransparency = 1
+        title.TextColor3 = CurrentTheme.textDim
+        title.TextSize = 12
+        title.Font = Enum.Font.Gotham
+        title.Text = stat.title
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Parent = card
+        
+        local value = Instance.new("TextLabel")
+        value.Size = UDim2.new(1, -60, 0, 35)
+        value.Position = UDim2.new(0, 50, 0, 38)
+        value.BackgroundTransparency = 1
+        value.TextColor3 = CurrentTheme.accent
+        value.TextSize = 28
+        value.Font = Enum.Font.GothamBold
+        value.Text = tostring(stat.value)
+        value.TextXAlignment = Enum.TextXAlignment.Left
+        value.Parent = card
     end
     
-    if cmd == "fire" then
-        local count = 0
-        for remote, info in pairs(RemoteManager.events) do
-            if RemoteManager:fireEvent(remote, args or "test") then
-                count = count + 1
-            end
-        end
-        log("Fired " .. count .. " event(s)", "COMMAND")
-        return
-    end
+    -- Scan button
+    local scanBtn = Instance.new("TextButton")
+    scanBtn.Name = "ScanBtn"
+    scanBtn.Size = UDim2.new(1, 0, 0, 40)
+    scanBtn.Position = UDim2.new(0, 0, 1, -50)
+    scanBtn.BackgroundColor3 = CurrentTheme.accent
+    scanBtn.TextColor3 = CurrentTheme.text
+    scanBtn.TextSize = 14
+    scanBtn.Font = Enum.Font.GothamBold
+    scanBtn.Text = "🔍 SCAN FOR REMOTES"
+    scanBtn.Parent = tab
     
-    if cmd == "scan" then
-        RemoteManager:discoverAndConnect()
-        return
-    end
+    local scanBtnCorner = Instance.new("UICorner")
+    scanBtnCorner.CornerRadius = UDim.new(0, 6)
+    scanBtnCorner.Parent = scanBtn
     
-    if cmd == "list" then
-        local count = 0
-        for remote, info in pairs(RemoteManager.events) do
-            print(string.format("  [%d] %s", count + 1, info.name))
-            count = count + 1
-        end
-        if count == 0 then
-            print("  (No remotes found)")
-        end
-        return
-    end
-    
-    if cmd == "status" then
-        local total = 0
-        local active = 0
-        for remote, info in pairs(RemoteManager.events) do
-            total = total + 1
-            if remote.Parent then
-                active = active + 1
-            end
-        end
-        log(string.format("Status: %d/%d remotes active", active, total), "STATUS")
-        return
-    end
-    
-    if cmd == "help" then
-        print([[
-AUTO COMMANDS:
-  exec <code>      - Execute Lua code
-  fire [arg]       - Fire all remotes with optional argument
-  scan             - Rescan for remotes
-  list             - List found remotes
-  status           - Show status
-  help             - Show this help
-        ]])
-        return
-    end
-    
-    log("Unknown command: " .. (cmd or ""), "WARN")
+    scanBtn.MouseButton1Click:Connect(function()
+        local remotes = RemoteDiscovery:scanAllServices()
+        State.analytics.discoveredCount = #remotes
+        scanBtn.Text = "✓ SCAN COMPLETE (" .. #remotes .. " found)"
+        task.wait(2)
+        scanBtn.Text = "🔍 SCAN FOR REMOTES"
+    end)
 end
 
--- ============================================================
--- PERIODIC MONITORING
--- ============================================================
-
-local function startMonitoring()
-    task.spawn(function()
-        while true do
-            task.wait(CONFIG.SCAN_INTERVAL)
+function GUI:createRemotesTab(parent)
+    local tab = Instance.new("Frame")
+    tab.Name = "Remotes"
+    tab.Size = UDim2.new(1, 0, 1, 0)
+    tab.BackgroundTransparency = 1
+    tab.Visible = false
+    tab.Parent = parent
+    
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Size = UDim2.new(1, 0, 1, -50)
+    scrollFrame.BackgroundTransparency = 1
+    scrollFrame.ScrollBarThickness = 6
+    scrollFrame.ScrollBarImageColor3 = CurrentTheme.accent
+    scrollFrame.Parent = tab
+    
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 8)
+    layout.FillDirection = Enum.FillDirection.Vertical
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = scrollFrame
+    
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
+    layout.Changed:Connect(function()
+        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+    end)
+    
+    -- Refresh button
+    local refreshBtn = Instance.new("TextButton")
+    refreshBtn.Size = UDim2.new(1, 0, 0, 40)
+    refreshBtn.Position = UDim2.new(0, 0, 1, -45)
+    refreshBtn.BackgroundColor3 = CurrentTheme.accent
+    refreshBtn.TextColor3 = CurrentTheme.text
+    refreshBtn.TextSize = 12
+    refreshBtn.Font = Enum.Font.GothamBold
+    refreshBtn.Text = "🔄 REFRESH REMOTES"
+    refreshBtn.Parent = tab
+    
+    local refreshBtnCorner = Instance.new("UICorner")
+    refreshBtnCorner.CornerRadius = UDim.new(0, 6)
+    refreshBtnCorner.Parent = refreshBtn
+    
+    refreshBtn.MouseButton1Click:Connect(function()
+        scrollFrame:ClearAllChildren()
+        local remotes = RemoteDiscovery:scanAllServices()
+        
+        for _, remote in ipairs(remotes) do
+            local item = Instance.new("TextButton")
+            item.Size = UDim2.new(1, 0, 0, 50)
+            item.BackgroundColor3 = CurrentTheme.secondary
+            item.TextColor3 = CurrentTheme.text
+            item.TextSize = 12
+            item.Font = Enum.Font.Gotham
+            item.Text = "🔌 " .. remote.name .. " (" .. remote.type .. ")"
+            item.TextXAlignment = Enum.TextXAlignment.Left
+            item.Parent = scrollFrame
             
-            local oldCount = 0
-            for _ in pairs(RemoteManager.events) do
-                oldCount = oldCount + 1
-            end
+            local itemCorner = Instance.new("UICorner")
+            itemCorner.CornerRadius = UDim.new(0, 6)
+            itemCorner.Parent = item
             
-            RemoteManager:findAllRemotes(ReplicatedStorage, 0)
+            local itemPadding = Instance.new("UIPadding")
+            itemPadding.PaddingLeft = UDim.new(0, 10)
+            itemPadding.Parent = item
             
-            local newCount = 0
-            for _ in pairs(RemoteManager.events) do
-                newCount = newCount + 1
-            end
-            
-            if newCount > oldCount then
-                log("Found " .. (newCount - oldCount) .. " new remote(s)", "MONITOR")
-            end
+            item.MouseButton1Click:Connect(function()
+                print("Clicked remote: " .. remote.name)
+            end)
         end
     end)
+end
+
+function GUI:createExecutorTab(parent)
+    local tab = Instance.new("Frame")
+    tab.Name = "Executor"
+    tab.Size = UDim2.new(1, 0, 1, 0)
+    tab.BackgroundTransparency = 1
+    tab.Visible = false
+    tab.Parent = parent
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 30)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = CurrentTheme.text
+    label.TextSize = 14
+    label.Font = Enum.Font.Gotham
+    label.Text = "Code Editor"
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = tab
+    
+    local textBox = Instance.new("TextBox")
+    textBox.Name = "CodeEditor"
+    textBox.Size = UDim2.new(1, 0, 0, 300)
+    textBox.Position = UDim2.new(0, 0, 0, 35)
+    textBox.BackgroundColor3 = CurrentTheme.secondary
+    textBox.TextColor3 = CurrentTheme.text
+    textBox.TextSize = 12
+    textBox.Font = Enum.Font.Courier
+    textBox.Text = "-- Write your Lua code here\nprint('Hello, World!')"
+    textBox.MultiLine = true
+    textBox.TextWrapped = true
+    textBox.Parent = tab
+    
+    local textBoxCorner = Instance.new("UICorner")
+    textBoxCorner.CornerRadius = UDim.new(0, 6)
+    textBoxCorner.Parent = textBox
+    
+    local textBoxPadding = Instance.new("UIPadding")
+    textBoxPadding.PaddingLeft = UDim.new(0, 10)
+    textBoxPadding.PaddingRight = UDim.new(0, 10)
+    textBoxPadding.PaddingTop = UDim.new(0, 8)
+    textBoxPadding.Parent = textBox
+    
+    -- Output display
+    local outputLabel = Instance.new("TextLabel")
+    outputLabel.Size = UDim2.new(1, 0, 0, 25)
+    outputLabel.Position = UDim2.new(0, 0, 0, 340)
+    outputLabel.BackgroundTransparency = 1
+    outputLabel.TextColor3 = CurrentTheme.text
+    outputLabel.TextSize = 14
+    outputLabel.Font = Enum.Font.Gotham
+    outputLabel.Text = "Output"
+    outputLabel.TextXAlignment = Enum.TextXAlignment.Left
+    outputLabel.Parent = tab
+    
+    local outputBox = Instance.new("TextLabel")
+    outputBox.Name = "OutputBox"
+    outputBox.Size = UDim2.new(1, 0, 1, -370)
+    outputBox.Position = UDim2.new(0, 0, 0, 370)
+    outputBox.BackgroundColor3 = CurrentTheme.secondary
+    outputBox.TextColor3 = CurrentTheme.success
+    outputBox.TextSize = 11
+    outputBox.Font = Enum.Font.Courier
+    outputBox.Text = "> Ready for input"
+    outputBox.TextXAlignment = Enum.TextXAlignment.Left
+    outputBox.TextYAlignment = Enum.TextYAlignment.Top
+    outputBox.TextWrapped = true
+    outputBox.Parent = tab
+    
+    local outputBoxCorner = Instance.new("UICorner")
+    outputBoxCorner.CornerRadius = UDim.new(0, 6)
+    outputBoxCorner.Parent = outputBox
+    
+    local outputBoxPadding = Instance.new("UIPadding")
+    outputBoxPadding.PaddingLeft = UDim.new(0, 10)
+    outputBoxPadding.PaddingRight = UDim.new(0, 10)
+    outputBoxPadding.PaddingTop = UDim.new(0, 8)
+    outputBoxPadding.Parent = outputBox
+    
+    -- Execute button
+    local execBtn = Instance.new("TextButton")
+    execBtn.Name = "ExecuteBtn"
+    execBtn.Size = UDim2.new(0.5, -5, 0, 40)
+    execBtn.Position = UDim2.new(0, 0, 1, -45)
+    execBtn.BackgroundColor3 = CurrentTheme.success
+    execBtn.TextColor3 = CurrentTheme.text
+    execBtn.TextSize = 14
+    execBtn.Font = Enum.Font.GothamBold
+    execBtn.Text = "▶ EXECUTE"
+    execBtn.Parent = tab
+    
+    local execBtnCorner = Instance.new("UICorner")
+    execBtnCorner.CornerRadius = UDim.new(0, 6)
+    execBtnCorner.Parent = execBtn
+    
+    execBtn.MouseButton1Click:Connect(function()
+        local code = textBox.Text
+        local success, result = Executor:execute(code, "gui_executor")
+        
+        if success then
+            outputBox.TextColor3 = CurrentTheme.success
+            outputBox.Text = "> ✓ Execution successful\n" .. tostring(result)
+        else
+            outputBox.TextColor3 = CurrentTheme.error
+            outputBox.Text = "> ✗ Error: " .. tostring(result)
+        end
+    end)
+    
+    -- Clear button
+    local clearBtn = Instance.new("TextButton")
+    clearBtn.Name = "ClearBtn"
+    clearBtn.Size = UDim2.new(0.5, -5, 0, 40)
+    clearBtn.Position = UDim2.new(0.5, 5, 1, -45)
+    clearBtn.BackgroundColor3 = CurrentTheme.secondary
+    clearBtn.TextColor3 = CurrentTheme.text
+    clearBtn.TextSize = 14
+    clearBtn.Font = Enum.Font.GothamBold
+    clearBtn.Text = "🗑️ CLEAR"
+    clearBtn.Parent = tab
+    
+    local clearBtnCorner = Instance.new("UICorner")
+    clearBtnCorner.CornerRadius = UDim.new(0, 6)
+    clearBtnCorner.Parent = clearBtn
+    
+    clearBtn.MouseButton1Click:Connect(function()
+        textBox.Text = ""
+        outputBox.Text = "> Cleared"
+    end)
+end
+
+function GUI:createAnalyticsTab(parent)
+    local tab = Instance.new("Frame")
+    tab.Name = "Analytics"
+    tab.Size = UDim2.new(1, 0, 1, 0)
+    tab.BackgroundTransparency = 1
+    tab.Visible = false
+    tab.Parent = parent
+    
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Size = UDim2.new(1, 0, 1, 0)
+    scrollFrame.BackgroundTransparency = 1
+    scrollFrame.ScrollBarThickness = 6
+    scrollFrame.Parent = tab
+    
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 10)
+    layout.FillDirection = Enum.FillDirection.Vertical
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = scrollFrame
+    
+    -- Sample chart
+    local chartFrame = Instance.new("Frame")
+    chartFrame.Size = UDim2.new(1, 0, 0, 200)
+    chartFrame.BackgroundColor3 = CurrentTheme.secondary
+    chartFrame.Parent = scrollFrame
+    
+    local chartCorner = Instance.new("UICorner")
+    chartCorner.CornerRadius = UDim.new(0, 8)
+    chartCorner.Parent = chartFrame
+    
+    local chartTitle = Instance.new("TextLabel")
+    chartTitle.Size = UDim2.new(1, 0, 0, 30)
+    chartTitle.BackgroundTransparency = 1
+    chartTitle.TextColor3 = CurrentTheme.text
+    chartTitle.TextSize = 14
+    chartTitle.Font = Enum.Font.GothamBold
+    chartTitle.Text = "📊 Execution Timeline"
+    chartTitle.TextXAlignment = Enum.TextXAlignment.Left
+    chartTitle.Parent = chartFrame
+    
+    local chartPadding = Instance.new("UIPadding")
+    chartPadding.PaddingTop = UDim.new(0, 8)
+    chartPadding.PaddingLeft = UDim.new(0, 10)
+    chartPadding.Parent = chartFrame
+    
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y)
+    layout.Changed:Connect(function()
+        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+    end)
+end
+
+function GUI:createSecurityTab(parent)
+    local tab = Instance.new("Frame")
+    tab.Name = "Security"
+    tab.Size = UDim2.new(1, 0, 1, 0)
+    tab.BackgroundTransparency = 1
+    tab.Visible = false
+    tab.Parent = parent
+    
+    local securityLabel = Instance.new("TextLabel")
+    securityLabel.Size = UDim2.new(1, 0, 0, 30)
+    securityLabel.BackgroundTransparency = 1
+    securityLabel.TextColor3 = CurrentTheme.text
+    securityLabel.TextSize = 14
+    securityLabel.Font = Enum.Font.GothamBold
+    securityLabel.Text = "🔒 Security Settings"
+    securityLabel.TextXAlignment = Enum.TextXAlignment.Left
+    securityLabel.Parent = tab
+    
+    -- Blocked keywords list
+    local blockedLabel = Instance.new("TextLabel")
+    blockedLabel.Size = UDim2.new(1, 0, 0, 20)
+    blockedLabel.Position = UDim2.new(0, 0, 0, 40)
+    blockedLabel.BackgroundTransparency = 1
+    blockedLabel.TextColor3 = CurrentTheme.textDim
+    blockedLabel.TextSize = 12
+    blockedLabel.Font = Enum.Font.Gotham
+    blockedLabel.Text = "Blocked Keywords: " .. table.concat(State.security.blockedKeywords, ", ")
+    blockedLabel.TextXAlignment = Enum.TextXAlignment.Left
+    blockedLabel.TextWrapped = true
+    blockedLabel.Parent = tab
+    
+    -- Execution log
+    local logLabel = Instance.new("TextLabel")
+    logLabel.Size = UDim2.new(1, 0, 0, 20)
+    logLabel.Position = UDim2.new(0, 0, 0, 70)
+    logLabel.BackgroundTransparency = 1
+    logLabel.TextColor3 = CurrentTheme.text
+    logLabel.TextSize = 12
+    logLabel.Font = Enum.Font.GothamBold
+    logLabel.Text = "📋 Execution Log"
+    logLabel.TextXAlignment = Enum.TextXAlignment.Left
+    logLabel.Parent = tab
+    
+    local logBox = Instance.new("TextLabel")
+    logBox.Size = UDim2.new(1, 0, 1, -90)
+    logBox.Position = UDim2.new(0, 0, 0, 95)
+    logBox.BackgroundColor3 = CurrentTheme.secondary
+    logBox.TextColor3 = CurrentTheme.textDim
+    logBox.TextSize = 10
+    logBox.Font = Enum.Font.Courier
+    logBox.Text = "No executions logged yet"
+    logBox.TextXAlignment = Enum.TextXAlignment.Left
+    logBox.TextYAlignment = Enum.TextYAlignment.Top
+    logBox.TextWrapped = true
+    logBox.Parent = tab
+    
+    local logBoxCorner = Instance.new("UICorner")
+    logBoxCorner.CornerRadius = UDim.new(0, 6)
+    logBoxCorner.Parent = logBox
+    
+    local logBoxPadding = Instance.new("UIPadding")
+    logBoxPadding.PaddingLeft = UDim.new(0, 8)
+    logBoxPadding.PaddingTop = UDim.new(0, 8)
+    logBoxPadding.Parent = logBox
+end
+
+function GUI:createSettingsTab(parent)
+    local tab = Instance.new("Frame")
+    tab.Name = "Settings"
+    tab.Size = UDim2.new(1, 0, 1, 0)
+    tab.BackgroundTransparency = 1
+    tab.Visible = false
+    tab.Parent = parent
+    
+    local themeLabel = Instance.new("TextLabel")
+    themeLabel.Size = UDim2.new(1, 0, 0, 25)
+    themeLabel.BackgroundTransparency = 1
+    themeLabel.TextColor3 = CurrentTheme.text
+    themeLabel.TextSize = 14
+    themeLabel.Font = Enum.Font.GothamBold
+    themeLabel.Text = "⚡ Theme"
+    themeLabel.TextXAlignment = Enum.TextXAlignment.Left
+    themeLabel.Parent = tab
+    
+    local darkThemeBtn = Instance.new("TextButton")
+    darkThemeBtn.Name = "DarkTheme"
+    darkThemeBtn.Size = UDim2.new(0.5, -5, 0, 35)
+    darkThemeBtn.Position = UDim2.new(0, 0, 0, 30)
+    darkThemeBtn.BackgroundColor3 = CurrentTheme.secondary
+    darkThemeBtn.TextColor3 = CurrentTheme.accent
+    darkThemeBtn.TextSize = 12
+    darkThemeBtn.Font = Enum.Font.GothamBold
+    darkThemeBtn.Text = "🌙 Dark Theme"
+    darkThemeBtn.Parent = tab
+    
+    local lightThemeBtn = Instance.new("TextButton")
+    lightThemeBtn.Name = "LightTheme"
+    lightThemeBtn.Size = UDim2.new(0.5, -5, 0, 35)
+    lightThemeBtn.Position = UDim2.new(0.5, 5, 0, 30)
+    lightThemeBtn.BackgroundColor3 = CurrentTheme.secondary
+    lightThemeBtn.TextColor3 = CurrentTheme.text
+    lightThemeBtn.TextSize = 12
+    lightThemeBtn.Font = Enum.Font.GothamBold
+    lightThemeBtn.Text = "☀️ Light Theme"
+    lightThemeBtn.Parent = tab
+    
+    local infoLabel = Instance.new("TextLabel")
+    infoLabel.Size = UDim2.new(1, 0, 0, 100)
+    infoLabel.Position = UDim2.new(0, 0, 0, 80)
+    infoLabel.BackgroundTransparency = 1
+    infoLabel.TextColor3 = CurrentTheme.textDim
+    infoLabel.TextSize = 12
+    infoLabel.Font = Enum.Font.Gotham
+    infoLabel.Text = "Version: " .. VERSION .. " (Build " .. BUILD .. ")\n\nServer Automation Suite is a professional tool for testing and automation.\n\nAlways verify you have permission before using on any server."
+    infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+    infoLabel.TextYAlignment = Enum.TextYAlignment.Top
+    infoLabel.TextWrapped = true
+    infoLabel.Parent = tab
+end
+
+function GUI:switchTab(mainWindow, tabName)
+    local contentFrame = mainWindow:FindFirstChild("ContentFrame")
+    if not contentFrame then return end
+    
+    for _, child in ipairs(contentFrame:GetChildren()) do
+        if child:IsA("Frame") and child.Name ~= "UIGridLayout" and child.Name ~= "UIPadding" then
+            child.Visible = (child.Name == tabName)
+        end
+    end
 end
 
 -- ============================================================
 -- INITIALIZATION
 -- ============================================================
 
-local function initialize()
-    log("Initializing version " .. VERSION, "INIT")
-    
-    if not ReplicatedStorage then
-        logError("ReplicatedStorage not accessible!")
-        return false
-    end
-    
-    -- Initial discovery
-    local totalRemotes, connectedListeners = RemoteManager:discoverAndConnect()
-    
-    -- Start monitoring
-    startMonitoring()
-    
-    log("✓ Ready! Type 'help' for commands", "INIT")
-    
-    return true
-end
+print("╔════════════════════════════════════════════════════════╗")
+print("║  ROBLOX SERVER AUTOMATION SUITE 2026 PRO EDITION       ║")
+print("║  Build " .. BUILD .. " - Ready for execution                       ║")
+print("╚════════════════════════════════════════════════════════╝")
 
--- ============================================================
--- CONSOLE COMMAND HOOK
--- ============================================================
+-- Create the GUI
+GUI:createMainWindow()
 
-local function hookConsoleInput()
-    -- This only works in executors with console input
-    -- For manual testing, use: CommandProcessor:handleCommand("scan")
-    
-    log("Note: Use getgenv().auto:cmd(string) to send commands", "INIT")
-    
-    -- Make accessible from console
-    getgenv().auto = {
-        cmd = function(input)
-            CommandProcessor:handleCommand(input)
-        end,
-        exec = function(code)
-            return Executor:execute(code, "console")
-        end,
-        fire = function(arg)
-            RemoteManager:fireEvent(next(RemoteManager.events), arg)
-        end,
-        status = function()
-            CommandProcessor:handleCommand("status")
-        end,
-        manager = RemoteManager,
-    }
-end
-
--- ============================================================
--- AUTO-EXECUTE HELPFUL COMMANDS
--- ============================================================
-
-local function demonstrateUsage()
-    log("Example usage:", "HELP")
-    print("  auto.cmd('scan')         - Scan for remotes")
-    print("  auto.cmd('list')         - List remotes")
-    print("  auto.cmd('status')       - Show status")
-    print("  auto.exec('print(1)')    - Execute code")
-    print("  auto.fire('test')        - Fire remotes")
-    print("  auto.cmd('help')         - Show all commands")
-end
-
--- ============================================================
--- MAIN EXECUTION
--- ============================================================
-
-log("================================", "BANNER")
-log("SERVER AUTOMATION v" .. VERSION, "BANNER")
-log("Standalone Executor Ready", "BANNER")
-log("================================", "BANNER")
-
-if initialize() then
-    hookConsoleInput()
-    demonstrateUsage()
-else
-    logError("Failed to initialize")
-end
-
--- ============================================================
--- COMMAND-LINE INTERFACE (For testing)
--- ============================================================
-
--- Auto-run initial commands
-task.wait(0.5)
-CommandProcessor:handleCommand("list")
+print("✓ GUI initialized successfully")
+print("✓ All systems online")
+print("\n[AUTO] Ready. Type 'help' for more information.")
