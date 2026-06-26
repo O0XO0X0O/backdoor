@@ -1,153 +1,246 @@
 --[[
-    IMPROVED SERVER AUTOMATION SCRIPT - 2026 EDITION
+    ============================================================
+    UNIFIED SERVER AUTOMATION SCRIPT - STANDALONE EXECUTION
+    ============================================================
     
-    Key Improvements:
-    1. Uses WaitForChild() for reliable async loading
-    2. Better error logging and diagnostics
-    3. Proper connection validation before firing
-    4. Depth-based recursive discovery (finds nested remotes)
-    5. Rate limiting to avoid firing issues
-    6. Better type checking and safety
-    7. Separate monitoring dashboard
+    This script is designed to run in a Lua executor (e.g., Fluxus, Xeno)
+    Not for Roblox Studio - use directly in-game
+    
+    Features:
+    - Single file, no dependencies
+    - Robust remote event discovery and execution
+    - Real-time error logging and diagnostics
+    - Auto-recovery on failures
+    - Works with executor console
+    
+    Usage:
+    1. Open your Lua executor (Fluxus, Xeno, etc.)
+    2. Paste entire script into editor
+    3. Click Execute
+    4. Watch console for [AUTO] logs
+    5. Use provided commands to test
 ]]
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
+local VERSION = "2026.1"
+local AUTO = setmetatable({}, {
+    __tostring = function() return "[AUTO]" end
+})
 
--- CONFIGURATION
+-- ============================================================
+-- CORE CONFIGURATION
+-- ============================================================
+
 local CONFIG = {
-    DISCOVERY_DEPTH = 5,           -- How deep to search for remotes
-    FIRE_COOLDOWN = 0.1,           -- Cooldown between fires (seconds)
-    RELOAD_INTERVAL = 30,          -- Reload logic every X seconds
-    ENABLE_LOGGING = true,         -- Enable detailed logging
-    MAX_ATTEMPTS = 3,              -- Max attempts before giving up
-    TIMEOUT_DURATION = 5,          -- Timeout for waitforchild
+    VERBOSE = true,
+    DISCOVERY_DEPTH = 8,
+    FIRE_COOLDOWN = 0.15,
+    COMMAND_TIMEOUT = 10,
+    MAX_RETRIES = 3,
+    SCAN_INTERVAL = 25,
 }
 
+-- ============================================================
 -- LOGGING SYSTEM
-local Logger = {}
-function Logger:log(message, level)
+-- ============================================================
+
+local function log(msg, level)
     level = level or "INFO"
-    if CONFIG.ENABLE_LOGGING then
-        print(string.format("[DAN][%s] %s", level, message))
+    local prefix = string.format("[AUTO][%s]", level)
+    print(prefix .. " " .. msg)
+end
+
+local function logError(msg)
+    log(msg, "ERROR")
+    warn(msg)
+end
+
+local function logDebug(msg)
+    if CONFIG.VERBOSE then
+        log(msg, "DEBUG")
     end
 end
 
-function Logger:error(message)
-    self:log(message, "ERROR")
-    warn(message)
+-- ============================================================
+-- SERVICE RETRIEVAL (Safe with fallbacks)
+-- ============================================================
+
+local Services = {}
+local function getService(name)
+    if Services[name] then
+        return Services[name]
+    end
+    
+    local success, service = pcall(function()
+        return game:GetService(name)
+    end)
+    
+    if success then
+        Services[name] = service
+        return service
+    end
+    
+    logError("Failed to get service: " .. name)
+    return nil
 end
 
-function Logger:debug(message)
-    self:log(message, "DEBUG")
-end
+local ReplicatedStorage = getService("ReplicatedStorage")
+local Players = getService("Players")
+local RunService = getService("RunService")
 
--- REMOTE EVENT DISCOVERY
-local RemoteDiscovery = {}
-RemoteDiscovery.foundEvents = {}
-RemoteDiscovery.lastFireTime = {}
+-- ============================================================
+-- REMOTE EVENT MANAGER
+-- ============================================================
 
--- Recursive search function
-function RemoteDiscovery:searchForRemotes(parent, depth)
-    if depth > CONFIG.DISCOVERY_DEPTH then
+local RemoteManager = {
+    events = {},
+    lastFire = {},
+    failureCount = {},
+    listeners = {}
+}
+
+function RemoteManager:findAllRemotes(folder, depth)
+    if not folder or depth > CONFIG.DISCOVERY_DEPTH then
         return
     end
     
-    if not parent or not parent:IsDescendantOf(game) then
+    if not pcall(function() return folder:IsDescendantOf(game) end) then
         return
     end
     
     pcall(function()
-        for _, obj in pairs(parent:GetChildren()) do
-            -- Check if it's a RemoteEvent
+        for _, obj in pairs(folder:GetChildren()) do
             if obj:IsA("RemoteEvent") then
-                if not self.foundEvents[obj] then
-                    self.foundEvents[obj] = {
+                if not self.events[obj] then
+                    self.events[obj] = {
                         name = obj.Name,
                         path = obj:GetFullName(),
-                        parent = parent.Name,
                         depth = depth,
-                        connected = false
+                        active = true
                     }
-                    Logger:log("✅ Found RemoteEvent: " .. obj.Name .. " at depth " .. depth, "DISCOVERY")
+                    logDebug("Found: " .. obj.Name .. " (depth " .. depth .. ")")
                 end
             end
             
-            -- Recursively search children
-            self:searchForRemotes(obj, depth + 1)
+            -- Recursive search
+            self:findAllRemotes(obj, depth + 1)
         end
     end)
 end
 
--- Safe fire function with cooldown
-function RemoteDiscovery:fireEventSafely(remoteEvent, ...)
-    if not remoteEvent or not remoteEvent.Parent then
-        Logger:error("RemoteEvent is nil or destroyed!")
+function RemoteManager:canFire(remote)
+    if not remote or not remote.Parent then
         return false
     end
     
-    -- Check cooldown
-    local lastTime = self.lastFireTime[remoteEvent] or 0
-    local timeSinceLastFire = tick() - lastTime
+    local lastTime = self.lastFire[remote] or 0
+    local elapsed = tick() - lastTime
     
-    if timeSinceLastFire < CONFIG.FIRE_COOLDOWN then
+    return elapsed >= CONFIG.FIRE_COOLDOWN
+end
+
+function RemoteManager:fireEvent(remote, ...)
+    if not self:canFire(remote) then
         return false
     end
     
-    local success = false
-    local errorMsg = ""
+    local eventInfo = self.events[remote]
+    if not eventInfo then
+        return false
+    end
     
-    -- Attempt to fire with error handling
-    for attempt = 1, CONFIG.MAX_ATTEMPTS do
-        local fired = pcall(function()
-            remoteEvent:FireServer(...)
+    for attempt = 1, CONFIG.MAX_RETRIES do
+        local success = pcall(function()
+            remote:FireServer(...)
         end)
         
-        if fired then
-            success = true
-            self.lastFireTime[remoteEvent] = tick()
-            Logger:debug("Fired: " .. remoteEvent.Name .. " (attempt " .. attempt .. ")")
-            break
-        else
-            errorMsg = "Attempt " .. attempt .. " failed"
-            task.wait(0.05)  -- Brief pause before retry
+        if success then
+            self.lastFire[remote] = tick()
+            self.failureCount[remote] = 0
+            logDebug("Fired: " .. eventInfo.name)
+            return true
+        end
+        
+        task.wait(0.05)
+    end
+    
+    self.failureCount[remote] = (self.failureCount[remote] or 0) + 1
+    
+    if self.failureCount[remote] >= 5 then
+        logError("Repeated failures on: " .. eventInfo.name)
+    end
+    
+    return false
+end
+
+function RemoteManager:setupListeners()
+    local connected = 0
+    
+    for remote, info in pairs(self.events) do
+        if remote.Parent then
+            pcall(function()
+                if not self.listeners[remote] then
+                    remote.OnServerEvent:Connect(function(player, ...)
+                        logDebug(player.Name .. " triggered " .. info.name)
+                    end)
+                    self.listeners[remote] = true
+                    connected = connected + 1
+                end
+            end)
         end
     end
     
-    if not success then
-        Logger:error("Failed to fire " .. remoteEvent.Name .. ": " .. errorMsg)
-    end
-    
-    return success
+    return connected
 end
 
--- CODE EXECUTION ENGINE
-local CodeExecutor = {}
-
-function CodeExecutor:executeCode(codeString, context)
-    context = context or "general"
+function RemoteManager:discoverAndConnect()
+    log("Starting remote discovery...", "DISCOVER")
     
-    if not codeString or type(codeString) ~= "string" or codeString == "" then
-        Logger:error("Invalid code string provided")
-        return false, "Empty or invalid code"
+    self:findAllRemotes(ReplicatedStorage, 0)
+    
+    local count = 0
+    for _ in pairs(self.events) do
+        count = count + 1
     end
     
+    if count > 0 then
+        log("Found " .. count .. " RemoteEvent(s)", "DISCOVER")
+    else
+        log("No RemoteEvents found - this is normal if none exist", "WARN")
+    end
+    
+    local connected = self:setupListeners()
+    log("Connected listeners: " .. connected, "DISCOVER")
+    
+    return count, connected
+end
+
+-- ============================================================
+-- CODE EXECUTION ENGINE
+-- ============================================================
+
+local Executor = {}
+
+function Executor:execute(codeString, context)
+    context = context or "standalone"
+    
+    if not codeString or type(codeString) ~= "string" or codeString == "" then
+        return false, "Empty code"
+    end
+    
+    local env = {
+        print = print,
+        warn = warn,
+        task = task,
+        wait = wait,
+        game = game,
+        script = script,
+        _G = _G,
+    }
+    
     local success, result = pcall(function()
-        -- Create a safe environment
-        local env = {
-            print = print,
-            warn = warn,
-            task = task,
-            wait = wait,
-            game = game,
-            context = context
-        }
-        
-        -- Execute with custom environment
         local func = loadstring(codeString)
         if not func then
-            error("Failed to parse code")
+            error("Parse failed")
         end
         
         setfenv(func, env)
@@ -155,180 +248,210 @@ function CodeExecutor:executeCode(codeString, context)
     end)
     
     if success then
-        Logger:log("Code executed successfully in context: " .. context, "EXEC")
+        log("Code executed: " .. context, "EXEC")
         return true, result
     else
-        Logger:error("Code execution failed: " .. tostring(result))
+        logError("Execution failed (" .. context .. "): " .. tostring(result))
         return false, result
     end
 end
 
--- AUTOMATION ENGINE
-local AutomationEngine = {}
+-- ============================================================
+-- COMMAND PROCESSOR
+-- ============================================================
 
-function AutomationEngine:initialize()
-    Logger:log("🚀 Initializing Automation Engine...", "INIT")
-    
-    -- Initial discovery
-    RemoteDiscovery:searchForRemotes(ReplicatedStorage, 0)
-    
-    if next(RemoteDiscovery.foundEvents) then
-        Logger:log("Found " .. table.getn(RemoteDiscovery.foundEvents) .. " RemoteEvents", "INIT")
-    else
-        Logger:error("No RemoteEvents found in ReplicatedStorage!")
-    end
-end
+local CommandProcessor = {}
 
-function AutomationEngine:connectToRemotes()
-    Logger:log("Connecting to all discovered RemoteEvents...", "CONNECT")
-    
-    local connectedCount = 0
-    
-    for remoteEvent, eventInfo in pairs(RemoteDiscovery.foundEvents) do
-        if remoteEvent.Parent then  -- Check if remote still exists
-            pcall(function()
-                remoteEvent.OnServerEvent:Connect(function(player, ...)
-                    Logger:debug("OnServerEvent triggered by " .. player.Name .. " on " .. eventInfo.name)
-                    
-                    -- Handle different argument types
-                    local args = {...}
-                    if args[1] and type(args[1]) == "string" then
-                        CodeExecutor:executeCode(args[1], eventInfo.name)
-                    end
-                end)
-                
-                eventInfo.connected = true
-                connectedCount = connectedCount + 1
-                Logger:log("Connected to: " .. eventInfo.name, "CONNECT")
-            end)
-        end
+function CommandProcessor:parseCommand(input)
+    local parts = {}
+    for part in string.gmatch(input, "%S+") do
+        table.insert(parts, part)
     end
     
-    Logger:log("Successfully connected to " .. connectedCount .. " events", "CONNECT")
+    return parts[1], table.concat(parts, " ", 2)
 end
 
-function AutomationEngine:setupCustomCommandRemote()
-    -- Create or find the command remote
-    local commandRemote
+function CommandProcessor:handleCommand(input)
+    local cmd, args = self:parseCommand(input)
     
-    -- Try to find existing
-    commandRemote = ReplicatedStorage:FindFirstChild("DAN_COMMAND")
-    
-    -- Create new if doesn't exist
-    if not commandRemote then
-        commandRemote = Instance.new("RemoteEvent")
-        commandRemote.Name = "DAN_COMMAND"
-        commandRemote.Parent = ReplicatedStorage
-        Logger:log("Created new command remote: DAN_COMMAND", "SETUP")
-    else
-        Logger:log("Using existing command remote: DAN_COMMAND", "SETUP")
-    end
-    
-    -- Clear old connections (if any)
-    commandRemote:GetSignal("OnServerEvent"):Wait()  -- This won't actually clear, but we can handle it
-    
-    -- Set up handler
-    commandRemote.OnServerEvent:Connect(function(player, commandCode)
-        Logger:log("📡 Player " .. player.Name .. " sent command", "COMMAND")
-        
-        if not commandCode or type(commandCode) ~= "string" then
-            Logger:error("Invalid command format from " .. player.Name)
-            return
+    if cmd == "exec" then
+        local success, result = Executor:execute(args, "user")
+        if success then
+            print("✓ Result: " .. tostring(result))
         end
-        
-        CodeExecutor:executeCode(commandCode, "player_command_" .. player.Name)
-    end)
-end
-
-function AutomationEngine:setupPeriodicRediscovery()
-    Logger:log("Setting up periodic rediscovery...", "SETUP")
-    
-    task.spawn(function()
-        while true do
-            task.wait(CONFIG.RELOAD_INTERVAL)
-            
-            -- Search for new remotes
-            local oldCount = table.getn(RemoteDiscovery.foundEvents)
-            RemoteDiscovery:searchForRemotes(ReplicatedStorage, 0)
-            local newCount = table.getn(RemoteDiscovery.foundEvents)
-            
-            if newCount > oldCount then
-                Logger:log("Found " .. (newCount - oldCount) .. " new RemoteEvents!", "REDISCOVERY")
-            end
-        end
-    end)
-end
-
-function AutomationEngine:startDiagnosticMonitor()
-    Logger:log("Starting diagnostic monitor...", "MONITOR")
-    
-    task.spawn(function()
-        while true do
-            task.wait(15)  -- Every 15 seconds
-            
-            local activeEvents = 0
-            local brokenEvents = 0
-            
-            for remoteEvent, eventInfo in pairs(RemoteDiscovery.foundEvents) do
-                if remoteEvent.Parent then
-                    activeEvents = activeEvents + 1
-                else
-                    brokenEvents = brokenEvents + 1
-                end
-            end
-            
-            Logger:log(
-                "📊 Status - Active: " .. activeEvents .. 
-                " | Broken/Destroyed: " .. brokenEvents ..
-                " | Connected: " .. (eventInfo.connected and "Yes" or "No"),
-                "MONITOR"
-            )
-        end
-    end)
-end
-
--- MAIN EXECUTION
-function danServerAutomation()
-    Logger:log("============ DAN SERVER AUTOMATION 2026 ============", "BANNER")
-    
-    -- Only run on server
-    if not RunService:IsServer() then
-        Logger:error("This script must run on the SERVER only!")
         return
     end
     
-    -- Initialize
-    AutomationEngine:initialize()
+    if cmd == "fire" then
+        local count = 0
+        for remote, info in pairs(RemoteManager.events) do
+            if RemoteManager:fireEvent(remote, args or "test") then
+                count = count + 1
+            end
+        end
+        log("Fired " .. count .. " event(s)", "COMMAND")
+        return
+    end
     
-    -- Setup command remote
-    AutomationEngine:setupCustomCommandRemote()
+    if cmd == "scan" then
+        RemoteManager:discoverAndConnect()
+        return
+    end
     
-    -- Connect to all found remotes
-    AutomationEngine:connectToRemotes()
+    if cmd == "list" then
+        local count = 0
+        for remote, info in pairs(RemoteManager.events) do
+            print(string.format("  [%d] %s", count + 1, info.name))
+            count = count + 1
+        end
+        if count == 0 then
+            print("  (No remotes found)")
+        end
+        return
+    end
     
-    -- Setup periodic checks
-    AutomationEngine:setupPeriodicRediscovery()
+    if cmd == "status" then
+        local total = 0
+        local active = 0
+        for remote, info in pairs(RemoteManager.events) do
+            total = total + 1
+            if remote.Parent then
+                active = active + 1
+            end
+        end
+        log(string.format("Status: %d/%d remotes active", active, total), "STATUS")
+        return
+    end
     
-    -- Start monitoring
-    AutomationEngine:startDiagnosticMonitor()
+    if cmd == "help" then
+        print([[
+AUTO COMMANDS:
+  exec <code>      - Execute Lua code
+  fire [arg]       - Fire all remotes with optional argument
+  scan             - Rescan for remotes
+  list             - List found remotes
+  status           - Show status
+  help             - Show this help
+        ]])
+        return
+    end
     
-    Logger:log("✅ Automation engine fully initialized and running!", "SUCCESS")
+    log("Unknown command: " .. (cmd or ""), "WARN")
 end
 
--- RUN
-danServerAutomation()
+-- ============================================================
+-- PERIODIC MONITORING
+-- ============================================================
 
---[[
-    USAGE GUIDE:
+local function startMonitoring()
+    task.spawn(function()
+        while true do
+            task.wait(CONFIG.SCAN_INTERVAL)
+            
+            local oldCount = 0
+            for _ in pairs(RemoteManager.events) do
+                oldCount = oldCount + 1
+            end
+            
+            RemoteManager:findAllRemotes(ReplicatedStorage, 0)
+            
+            local newCount = 0
+            for _ in pairs(RemoteManager.events) do
+                newCount = newCount + 1
+            end
+            
+            if newCount > oldCount then
+                log("Found " .. (newCount - oldCount) .. " new remote(s)", "MONITOR")
+            end
+        end
+    end)
+end
+
+-- ============================================================
+-- INITIALIZATION
+-- ============================================================
+
+local function initialize()
+    log("Initializing version " .. VERSION, "INIT")
     
-    1. Place this script in ServerScriptService
-    2. The script will automatically find all RemoteEvents in ReplicatedStorage
-    3. To trigger commands, fire the "DAN_COMMAND" remote from client:
+    if not ReplicatedStorage then
+        logError("ReplicatedStorage not accessible!")
+        return false
+    end
     
-        local cmd = game.ReplicatedStorage.DAN_COMMAND
-        cmd:FireServer(print("Hello from client!"))
+    -- Initial discovery
+    local totalRemotes, connectedListeners = RemoteManager:discoverAndConnect()
     
-    4. Monitor the output console for [DAN] logs
+    -- Start monitoring
+    startMonitoring()
     
-    5. The script re-scans every 30 seconds for new RemoteEvents
-]]
+    log("✓ Ready! Type 'help' for commands", "INIT")
+    
+    return true
+end
+
+-- ============================================================
+-- CONSOLE COMMAND HOOK
+-- ============================================================
+
+local function hookConsoleInput()
+    -- This only works in executors with console input
+    -- For manual testing, use: CommandProcessor:handleCommand("scan")
+    
+    log("Note: Use getgenv().auto:cmd(string) to send commands", "INIT")
+    
+    -- Make accessible from console
+    getgenv().auto = {
+        cmd = function(input)
+            CommandProcessor:handleCommand(input)
+        end,
+        exec = function(code)
+            return Executor:execute(code, "console")
+        end,
+        fire = function(arg)
+            RemoteManager:fireEvent(next(RemoteManager.events), arg)
+        end,
+        status = function()
+            CommandProcessor:handleCommand("status")
+        end,
+        manager = RemoteManager,
+    }
+end
+
+-- ============================================================
+-- AUTO-EXECUTE HELPFUL COMMANDS
+-- ============================================================
+
+local function demonstrateUsage()
+    log("Example usage:", "HELP")
+    print("  auto.cmd('scan')         - Scan for remotes")
+    print("  auto.cmd('list')         - List remotes")
+    print("  auto.cmd('status')       - Show status")
+    print("  auto.exec('print(1)')    - Execute code")
+    print("  auto.fire('test')        - Fire remotes")
+    print("  auto.cmd('help')         - Show all commands")
+end
+
+-- ============================================================
+-- MAIN EXECUTION
+-- ============================================================
+
+log("================================", "BANNER")
+log("SERVER AUTOMATION v" .. VERSION, "BANNER")
+log("Standalone Executor Ready", "BANNER")
+log("================================", "BANNER")
+
+if initialize() then
+    hookConsoleInput()
+    demonstrateUsage()
+else
+    logError("Failed to initialize")
+end
+
+-- ============================================================
+-- COMMAND-LINE INTERFACE (For testing)
+-- ============================================================
+
+-- Auto-run initial commands
+task.wait(0.5)
+CommandProcessor:handleCommand("list")
