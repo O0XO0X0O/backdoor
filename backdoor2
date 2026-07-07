@@ -1,0 +1,1262 @@
+--[[
+    DarkX.lua - Enhanced Roblox Backdoor Scanner & Exploitation Tool
+
+    Features:
+    - 4-tab GUI: Scanner, Execute, Results, Logs
+    - Full scanning suite (remotes, scripts, obfuscation, HTTP, attributes)
+    - Code execution with text editor
+    - Safe Mode toggle
+    - Draggable, minimizable, modern UI
+--]]
+
+-- ==================== SERVICES ====================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local localPlayer = Players.LocalPlayer
+
+if not localPlayer then
+    warn("DarkX: Must be run from a LocalScript")
+    return
+end
+
+-- ==================== CONFIG ====================
+local CONFIG = {
+    SAFE_MODE = true,
+    SCAN_ENTIRE_GAME = true,
+    MAX_SCAN_DEPTH = 1000,
+    ENTROPY_THRESHOLD = 4.5,
+    MIN_SCRIPT_LENGTH = 50,
+    MAX_LOG_ENTRIES = 500,
+    UI_SCALE = 1,
+    WHITELISTED_REMOTES = {},
+    BLACKLISTED_PATTERNS = {
+        "getfenv", "setfenv", "debug.setupvalue", "debug.getupvalue",
+        "newcclosure", "checkcaller", "islclosure", "getconnections", "firesignal",
+    },
+}
+
+-- ==================== STATE ====================
+local State = {
+    BACKDOOR_ASSETS = {},
+    REMOTE_EVENTS = {},
+    SUSPICIOUS_STRINGS = {},
+    IS_SCANNING = false,
+    LAST_SCAN_TIME = 0,
+    LOGS = {},
+    CONNECTIONS = {},
+    MONITOR_CONNECTION = nil,
+}
+
+-- ==================== UTILITIES ====================
+local function log(level, message)
+    local levels = {DEBUG = 1, INFO = 2, WARN = 3, ERROR = 4}
+    if (levels[level] or 2) < 2 then return end
+
+    local entry = {timestamp = os.time(), level = level, message = message}
+    table.insert(State.LOGS, 1, entry)
+    while #State.LOGS > CONFIG.MAX_LOG_ENTRIES do
+        table.remove(State.LOGS)
+    end
+    print(string.format("[DarkX %s] %s", level, message))
+end
+
+local function safePcall(func, ...)
+    local success, result = pcall(func, ...)
+    if not success then log("ERROR", tostring(result)) end
+    return success, result
+end
+
+local function isWhitelisted(name)
+    for _, w in ipairs(CONFIG.WHITELISTED_REMOTES) do
+        if name == w then return true end
+    end
+    return false
+end
+
+local function clearState()
+    State.BACKDOOR_ASSETS = {}
+    State.REMOTE_EVENTS = {}
+    State.SUSPICIOUS_STRINGS = {}
+end
+
+local function disconnectAll()
+    for _, conn in ipairs(State.CONNECTIONS) do
+        if conn then pcall(function() conn:Disconnect() end) end
+    end
+    State.CONNECTIONS = {}
+    if State.MONITOR_CONNECTION then
+        pcall(function() State.MONITOR_CONNECTION:Disconnect() end)
+        State.MONITOR_CONNECTION = nil
+    end
+end
+
+local function getDescendantsSafe(root, maxDepth)
+    maxDepth = maxDepth or CONFIG.MAX_SCAN_DEPTH
+    local result = {}
+    local count = 0
+
+    local function recurse(obj, depth)
+        if depth > maxDepth or count > 10000 then return end
+        table.insert(result, obj)
+        count = count + 1
+        local children = safePcall(function() return obj:GetChildren() end)
+        if children then
+            for _, child in ipairs(children) do
+                recurse(child, depth + 1)
+            end
+        end
+    end
+
+    recurse(root, 0)
+    return result
+end
+
+-- ==================== GUI SETUP ====================
+local existingGui = localPlayer:WaitForChild("PlayerGui"):FindFirstChild("DarkX_GUI")
+if existingGui then existingGui:Destroy() end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "DarkX_GUI"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = localPlayer:WaitForChild("PlayerGui")
+
+-- Main Frame
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 520 * CONFIG.UI_SCALE, 0, 420 * CONFIG.UI_SCALE)
+mainFrame.Position = UDim2.new(0.5, -260 * CONFIG.UI_SCALE, 0.5, -210 * CONFIG.UI_SCALE)
+mainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+mainFrame.Parent = gui
+
+local mfCorner = Instance.new("UICorner")
+mfCorner.CornerRadius = UDim.new(0, 10)
+mfCorner.Parent = mainFrame
+
+-- Shadow
+local shadow = Instance.new("ImageLabel")
+shadow.Size = UDim2.new(1, 40, 1, 40)
+shadow.Position = UDim2.new(0, -20, 0, -20)
+shadow.BackgroundTransparency = 1
+shadow.Image = "rbxassetid://5554236805"
+shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+shadow.ImageTransparency = 0.6
+shadow.ScaleType = Enum.ScaleType.Slice
+shadow.SliceCenter = Rect.new(23, 23, 277, 277)
+shadow.ZIndex = 0
+shadow.Parent = mainFrame
+
+-- Title Bar
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 38)
+titleBar.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+titleBar.BorderSizePixel = 0
+titleBar.ZIndex = 10
+titleBar.Parent = mainFrame
+
+local tbCorner = Instance.new("UICorner")
+tbCorner.CornerRadius = UDim.new(0, 10)
+tbCorner.Parent = titleBar
+
+local title = Instance.new("TextLabel")
+title.Text = "🔍 DarkX Scanner"
+title.Size = UDim2.new(1, -100, 1, 0)
+title.Position = UDim2.new(0, 14, 0, 0)
+title.BackgroundTransparency = 1
+title.TextColor3 = Color3.fromRGB(220, 220, 230)
+title.TextSize = 15
+title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.ZIndex = 10
+title.Parent = titleBar
+
+-- Close
+local closeBtn = Instance.new("TextButton")
+closeBtn.Text = "✕"
+closeBtn.Size = UDim2.new(0, 38, 0, 38)
+closeBtn.Position = UDim2.new(1, -38, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.TextColor3 = Color3.fromRGB(220, 80, 80)
+closeBtn.TextSize = 16
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.ZIndex = 10
+titleBar.Parent = mainFrame
+closeBtn.Parent = titleBar
+closeBtn.MouseButton1Click:Connect(function()
+    disconnectAll()
+    gui:Destroy()
+end)
+
+-- Minimize
+local minBtn = Instance.new("TextButton")
+minBtn.Text = "−"
+minBtn.Size = UDim2.new(0, 38, 0, 38)
+minBtn.Position = UDim2.new(1, -76, 0, 0)
+minBtn.BackgroundTransparency = 1
+minBtn.TextColor3 = Color3.fromRGB(180, 180, 180)
+minBtn.TextSize = 20
+minBtn.Font = Enum.Font.GothamBold
+minBtn.ZIndex = 10
+minBtn.Parent = titleBar
+
+local minimized = false
+minBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    mainFrame:TweenSize(
+        minimized and UDim2.new(0, 520 * CONFIG.UI_SCALE, 0, 38)
+                     or UDim2.new(0, 520 * CONFIG.UI_SCALE, 0, 420 * CONFIG.UI_SCALE),
+        Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.25, true
+    )
+end)
+
+-- Tab Bar
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, 0, 0, 34)
+tabBar.Position = UDim2.new(0, 0, 0, 38)
+tabBar.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+tabBar.BorderSizePixel = 0
+tabBar.ZIndex = 10
+tabBar.Parent = mainFrame
+
+-- Content Frame
+local contentFrame = Instance.new("Frame")
+contentFrame.Size = UDim2.new(1, -20, 1, -82)
+contentFrame.Position = UDim2.new(0, 10, 0, 76)
+contentFrame.BackgroundTransparency = 1
+contentFrame.ZIndex = 10
+contentFrame.Parent = mainFrame
+
+-- Tabs
+local tabs = {"Scanner", "Execute", "Results", "Logs"}
+local currentTab = "Scanner"
+local tabContents = {}
+local tabButtons = {}
+
+for i, tabName in ipairs(tabs) do
+    local btn = Instance.new("TextButton")
+    btn.Text = tabName
+    btn.Size = UDim2.new(0, 110, 1, 0)
+    btn.Position = UDim2.new(0, (i-1) * 115 + 10, 0, 0)
+    btn.BackgroundColor3 = tabName == currentTab and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(28, 28, 36)
+    btn.TextColor3 = tabName == currentTab and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(140, 140, 150)
+    btn.TextSize = 13
+    btn.Font = Enum.Font.GothamSemibold
+    btn.BorderSizePixel = 0
+    btn.ZIndex = 10
+    btn.Parent = tabBar
+    tabButtons[tabName] = btn
+
+    local indicator = Instance.new("Frame")
+    indicator.Size = UDim2.new(1, 0, 0, 2)
+    indicator.Position = UDim2.new(0, 0, 1, -2)
+    indicator.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+    indicator.BorderSizePixel = 0
+    indicator.Visible = tabName == currentTab
+    indicator.ZIndex = 10
+    indicator.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        currentTab = tabName
+        for name, button in pairs(tabButtons) do
+            button.BackgroundColor3 = name == tabName and Color3.fromRGB(45, 45, 60) or Color3.fromRGB(28, 28, 36)
+            button.TextColor3 = name == tabName and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(140, 140, 150)
+            button:FindFirstChild("Frame").Visible = name == tabName
+        end
+        for name, content in pairs(tabContents) do
+            content.Visible = name == tabName
+        end
+    end)
+end
+
+-- ==================== SCANNER TAB ====================
+local scannerTab = Instance.new("Frame")
+scannerTab.Size = UDim2.new(1, 0, 1, 0)
+scannerTab.BackgroundTransparency = 1
+scannerTab.Visible = true
+scannerTab.ZIndex = 10
+scannerTab.Parent = contentFrame
+tabContents["Scanner"] = scannerTab
+
+local progressBg = Instance.new("Frame")
+progressBg.Size = UDim2.new(1, 0, 0, 4)
+progressBg.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+progressBg.BorderSizePixel = 0
+progressBg.ZIndex = 10
+progressBg.Parent = scannerTab
+
+local progressFill = Instance.new("Frame")
+progressFill.Size = UDim2.new(0, 0, 1, 0)
+progressFill.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+progressFill.BorderSizePixel = 0
+progressFill.ZIndex = 10
+progressFill.Parent = progressBg
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Text = "Ready to scan"
+statusLabel.Size = UDim2.new(1, 0, 0, 22)
+statusLabel.Position = UDim2.new(0, 0, 0, 12)
+statusLabel.BackgroundTransparency = 1
+statusLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+statusLabel.TextSize = 13
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.ZIndex = 10
+statusLabel.Parent = scannerTab
+
+local scanBtn = Instance.new("TextButton")
+scanBtn.Text = "🔍  Run Full Scan"
+scanBtn.Size = UDim2.new(0, 160, 0, 36)
+scanBtn.Position = UDim2.new(0, 0, 0, 44)
+scanBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 210)
+scanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+scanBtn.TextSize = 13
+scanBtn.Font = Enum.Font.GothamBold
+scanBtn.BorderSizePixel = 0
+scanBtn.AutoButtonColor = true
+scanBtn.ZIndex = 10
+scanBtn.Parent = scannerTab
+
+Instance.new("UICorner", scanBtn).CornerRadius = UDim.new(0, 8)
+
+-- Safe Mode Toggle Button
+local safeModeBtn = Instance.new("TextButton")
+safeModeBtn.Text = "🛡️ Safe Mode: ON"
+safeModeBtn.Size = UDim2.new(0, 150, 0, 36)
+safeModeBtn.Position = UDim2.new(0, 170, 0, 44)
+safeModeBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 60)
+safeModeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+safeModeBtn.TextSize = 12
+safeModeBtn.Font = Enum.Font.GothamBold
+safeModeBtn.BorderSizePixel = 0
+safeModeBtn.ZIndex = 10
+safeModeBtn.Parent = scannerTab
+
+Instance.new("UICorner", safeModeBtn).CornerRadius = UDim.new(0, 8)
+
+safeModeBtn.MouseButton1Click:Connect(function()
+    CONFIG.SAFE_MODE = not CONFIG.SAFE_MODE
+    safeModeBtn.Text = CONFIG.SAFE_MODE and "🛡️ Safe Mode: ON" or "⚠️ Safe Mode: OFF"
+    safeModeBtn.BackgroundColor3 = CONFIG.SAFE_MODE and Color3.fromRGB(40, 100, 60) or Color3.fromRGB(150, 60, 40)
+    log("INFO", "Safe Mode " .. (CONFIG.SAFE_MODE and "enabled" or "disabled"))
+end)
+
+-- Quick Actions
+local quickLabel = Instance.new("TextLabel")
+quickLabel.Text = "Quick Actions"
+quickLabel.Size = UDim2.new(1, 0, 0, 18)
+quickLabel.Position = UDim2.new(0, 0, 0, 92)
+quickLabel.BackgroundTransparency = 1
+quickLabel.TextColor3 = Color3.fromRGB(120, 120, 130)
+quickLabel.TextSize = 11
+quickLabel.Font = Enum.Font.GothamSemibold
+quickLabel.TextXAlignment = Enum.TextXAlignment.Left
+quickLabel.ZIndex = 10
+quickLabel.Parent = scannerTab
+
+local function createQuickButton(text, pos, callback)
+    local btn = Instance.new("TextButton")
+    btn.Text = text
+    btn.Size = UDim2.new(0, 150, 0, 30)
+    btn.Position = pos
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+    btn.TextColor3 = Color3.fromRGB(180, 180, 190)
+    btn.TextSize = 11
+    btn.Font = Enum.Font.Gotham
+    btn.BorderSizePixel = 0
+    btn.ZIndex = 10
+    btn.Parent = scannerTab
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    btn.MouseButton1Click:Connect(function() safePcall(callback) end)
+    return btn
+end
+
+createQuickButton("Scan Remotes", UDim2.new(0, 0, 0, 116), function() scanRemoteEvents(true) end)
+createQuickButton("Scan Scripts", UDim2.new(0, 160, 0, 116), function() scanScriptsOnly() end)
+createQuickButton("Clear Results", UDim2.new(0, 0, 0, 152), function() clearResults() end)
+createQuickButton("Test Remotes", UDim2.new(0, 160, 0, 152), function() testRemoteEvents(State.REMOTE_EVENTS) end)
+
+-- Stats Panel
+local statsPanel = Instance.new("Frame")
+statsPanel.Size = UDim2.new(1, 0, 0, 90)
+statsPanel.Position = UDim2.new(0, 0, 1, -90)
+statsPanel.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+statsPanel.BorderSizePixel = 0
+statsPanel.ZIndex = 10
+statsPanel.Parent = scannerTab
+
+Instance.new("UICorner", statsPanel).CornerRadius = UDim.new(0, 8)
+
+local statLabels = {}
+local statData = {
+    {name = "Remotes", default = "0"},
+    {name = "Suspicious", default = "0"},
+    {name = "Backdoors", default = "0"},
+    {name = "Last Scan", default = "Never"},
+}
+
+for i, stat in ipairs(statData) do
+    local col = (i - 1) % 2
+    local row = math.floor((i - 1) / 2)
+    local label = Instance.new("TextLabel")
+    label.Name = stat.name .. "Label"
+    label.Text = stat.name .. ": " .. stat.default
+    label.Size = UDim2.new(0.5, -10, 0, 20)
+    label.Position = UDim2.new(col, 10, 0, 10 + row * 22)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = Color3.fromRGB(160, 160, 170)
+    label.TextSize = 12
+    label.Font = Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.ZIndex = 10
+    label.Parent = statsPanel
+    statLabels[stat.name] = label
+end
+
+-- ==================== EXECUTE TAB ====================
+local executeTab = Instance.new("Frame")
+executeTab.Size = UDim2.new(1, 0, 1, 0)
+executeTab.BackgroundTransparency = 1
+executeTab.Visible = false
+executeTab.ZIndex = 10
+executeTab.Parent = contentFrame
+tabContents["Execute"] = executeTab
+
+local codeLabel = Instance.new("TextLabel")
+codeLabel.Text = "Lua Code Editor"
+codeLabel.Size = UDim2.new(1, 0, 0, 20)
+codeLabel.Position = UDim2.new(0, 0, 0, 0)
+codeLabel.BackgroundTransparency = 1
+codeLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
+codeLabel.TextSize = 13
+codeLabel.Font = Enum.Font.GothamBold
+codeLabel.TextXAlignment = Enum.TextXAlignment.Left
+codeLabel.ZIndex = 10
+codeLabel.Parent = executeTab
+
+-- Code Container
+local codeContainer = Instance.new("Frame")
+codeContainer.Size = UDim2.new(1, 0, 1, -110)
+codeContainer.Position = UDim2.new(0, 0, 0, 26)
+codeContainer.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+codeContainer.BorderSizePixel = 0
+codeContainer.ZIndex = 10
+codeContainer.Parent = executeTab
+
+Instance.new("UICorner", codeContainer).CornerRadius = UDim.new(0, 8)
+
+-- Line Numbers
+local lineNumbers = Instance.new("TextLabel")
+lineNumbers.Text = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15"
+lineNumbers.Size = UDim2.new(0, 30, 1, -10)
+lineNumbers.Position = UDim2.new(0, 4, 0, 5)
+lineNumbers.BackgroundTransparency = 1
+lineNumbers.TextColor3 = Color3.fromRGB(70, 70, 80)
+lineNumbers.TextSize = 12
+lineNumbers.Font = Enum.Font.Code
+lineNumbers.TextXAlignment = Enum.TextXAlignment.Right
+lineNumbers.ZIndex = 10
+lineNumbers.Parent = codeContainer
+
+-- Code Box
+local codeBox = Instance.new("TextBox")
+codeBox.Text = "-- Enter Lua code here\nprint('Hello from DarkX!')"
+codeBox.Size = UDim2.new(1, -42, 1, -10)
+codeBox.Position = UDim2.new(0, 36, 0, 5)
+codeBox.BackgroundTransparency = 1
+codeBox.TextColor3 = Color3.fromRGB(220, 220, 230)
+codeBox.TextSize = 12
+codeBox.Font = Enum.Font.Code
+codeBox.TextXAlignment = Enum.TextXAlignment.Left
+codeBox.TextYAlignment = Enum.TextYAlignment.Top
+codeBox.ClearTextOnFocus = false
+codeBox.MultiLine = true
+codeBox.ZIndex = 10
+codeBox.Parent = codeContainer
+
+-- Button Row
+local execBtn = Instance.new("TextButton")
+execBtn.Text = "▶ Execute"
+execBtn.Size = UDim2.new(0, 120, 0, 34)
+execBtn.Position = UDim2.new(0, 0, 1, -42)
+execBtn.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
+execBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+execBtn.TextSize = 13
+execBtn.Font = Enum.Font.GothamBold
+execBtn.BorderSizePixel = 0
+execBtn.ZIndex = 10
+execBtn.Parent = executeTab
+
+Instance.new("UICorner", execBtn).CornerRadius = UDim.new(0, 8)
+
+local execBackdoorBtn = Instance.new("TextButton")
+execBackdoorBtn.Text = "🔥 Execute via Backdoor"
+execBackdoorBtn.Size = UDim2.new(0, 180, 0, 34)
+execBackdoorBtn.Position = UDim2.new(0, 130, 1, -42)
+execBackdoorBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+execBackdoorBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+execBackdoorBtn.TextSize = 12
+execBackdoorBtn.Font = Enum.Font.GothamBold
+execBackdoorBtn.BorderSizePixel = 0
+execBackdoorBtn.ZIndex = 10
+execBackdoorBtn.Parent = executeTab
+
+Instance.new("UICorner", execBackdoorBtn).CornerRadius = UDim.new(0, 8)
+
+local clearCodeBtn = Instance.new("TextButton")
+clearCodeBtn.Text = "🗑️ Clear"
+clearCodeBtn.Size = UDim2.new(0, 80, 0, 34)
+clearCodeBtn.Position = UDim2.new(1, -80, 1, -42)
+clearCodeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
+clearCodeBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+clearCodeBtn.TextSize = 12
+clearCodeBtn.Font = Enum.Font.GothamBold
+clearCodeBtn.BorderSizePixel = 0
+clearCodeBtn.ZIndex = 10
+clearCodeBtn.Parent = executeTab
+
+Instance.new("UICorner", clearCodeBtn).CornerRadius = UDim.new(0, 8)
+
+-- Output Label
+local execOutput = Instance.new("TextLabel")
+execOutput.Text = "Output will appear here..."
+execOutput.Size = UDim2.new(1, 0, 0, 20)
+execOutput.Position = UDim2.new(0, 0, 1, -68)
+execOutput.BackgroundTransparency = 1
+execOutput.TextColor3 = Color3.fromRGB(120, 120, 130)
+execOutput.TextSize = 11
+execOutput.Font = Enum.Font.Gotham
+execOutput.TextXAlignment = Enum.TextXAlignment.Left
+execOutput.ZIndex = 10
+execOutput.Parent = executeTab
+
+-- ==================== RESULTS TAB ====================
+local resultsTab = Instance.new("Frame")
+resultsTab.Size = UDim2.new(1, 0, 1, 0)
+resultsTab.BackgroundTransparency = 1
+resultsTab.Visible = false
+resultsTab.ZIndex = 10
+resultsTab.Parent = contentFrame
+tabContents["Results"] = resultsTab
+
+local resultsScroll = Instance.new("ScrollingFrame")
+resultsScroll.Size = UDim2.new(1, 0, 1, -30)
+resultsScroll.BackgroundTransparency = 1
+resultsScroll.ScrollBarThickness = 6
+resultsScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 80)
+resultsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+resultsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+resultsScroll.ZIndex = 10
+resultsScroll.Parent = resultsTab
+
+local resultsListLayout = Instance.new("UIListLayout")
+resultsListLayout.Padding = UDim.new(0, 5)
+resultsListLayout.Parent = resultsScroll
+
+local resultsEmpty = Instance.new("TextLabel")
+resultsEmpty.Text = "No results yet. Run a scan to see findings."
+resultsEmpty.Size = UDim2.new(1, -10, 0, 60)
+resultsEmpty.BackgroundTransparency = 1
+resultsEmpty.TextColor3 = Color3.fromRGB(100, 100, 110)
+resultsEmpty.TextSize = 12
+resultsEmpty.Font = Enum.Font.Gotham
+resultsEmpty.TextWrapped = true
+resultsEmpty.ZIndex = 10
+resultsEmpty.Parent = resultsScroll
+
+-- ==================== LOGS TAB ====================
+local logsTab = Instance.new("Frame")
+logsTab.Size = UDim2.new(1, 0, 1, 0)
+logsTab.BackgroundTransparency = 1
+logsTab.Visible = false
+logsTab.ZIndex = 10
+logsTab.Parent = contentFrame
+tabContents["Logs"] = logsTab
+
+local logsScroll = Instance.new("ScrollingFrame")
+logsScroll.Size = UDim2.new(1, 0, 1, -30)
+logsScroll.BackgroundTransparency = 1
+logsScroll.ScrollBarThickness = 6
+logsScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 80)
+logsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+logsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+logsScroll.ZIndex = 10
+logsScroll.Parent = logsTab
+
+local logsListLayout = Instance.new("UIListLayout")
+logsListLayout.Padding = UDim.new(0, 3)
+logsListLayout.Parent = logsScroll
+
+local clearLogsBtn = Instance.new("TextButton")
+clearLogsBtn.Text = "Clear Logs"
+clearLogsBtn.Size = UDim2.new(0, 90, 0, 24)
+clearLogsBtn.Position = UDim2.new(1, -95, 1, -26)
+clearLogsBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+clearLogsBtn.TextColor3 = Color3.fromRGB(180, 180, 180)
+clearLogsBtn.TextSize = 11
+clearLogsBtn.Font = Enum.Font.Gotham
+clearLogsBtn.BorderSizePixel = 0
+clearLogsBtn.ZIndex = 10
+clearLogsBtn.Parent = logsTab
+
+Instance.new("UICorner", clearLogsBtn).CornerRadius = UDim.new(0, 6)
+
+clearLogsBtn.MouseButton1Click:Connect(function()
+    State.LOGS = {}
+    for _, child in ipairs(logsScroll:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+end)
+
+-- ==================== UI HELPERS ====================
+
+local function addLogEntry(level, message)
+    local levelColors = {
+        ERROR = Color3.fromRGB(220, 80, 80),
+        WARN = Color3.fromRGB(220, 160, 60),
+        INFO = Color3.fromRGB(100, 180, 220),
+        DEBUG = Color3.fromRGB(140, 140, 140),
+    }
+    local color = levelColors[level] or levelColors.INFO
+
+    local label = Instance.new("TextLabel")
+    label.Text = string.format("[%s] %s", level, message)
+    label.Size = UDim2.new(1, -10, 0, 18)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = color
+    label.TextSize = 11
+    label.Font = Enum.Font.Code
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextTruncate = Enum.TextTruncate.AtEnd
+    label.ZIndex = 10
+    label.Parent = logsScroll
+end
+
+local function addResultEntry(severity, title, description)
+    local severityColors = {
+        critical = Color3.fromRGB(220, 60, 60),
+        high = Color3.fromRGB(220, 120, 60),
+        medium = Color3.fromRGB(220, 180, 60),
+        suspicious = Color3.fromRGB(220, 180, 60),
+        low = Color3.fromRGB(60, 180, 60),
+        info = Color3.fromRGB(100, 150, 220),
+    }
+    local color = severityColors[severity] or severityColors.info
+
+    if resultsEmpty then resultsEmpty:Destroy() resultsEmpty = nil end
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, -10, 0, 52)
+    frame.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+    frame.BorderSizePixel = 0
+    frame.ZIndex = 10
+    frame.Parent = resultsScroll
+
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
+    local indicator = Instance.new("Frame")
+    indicator.Size = UDim2.new(0, 4, 1, 0)
+    indicator.BackgroundColor3 = color
+    indicator.BorderSizePixel = 0
+    indicator.ZIndex = 10
+    indicator.Parent = frame
+    Instance.new("UICorner", indicator).CornerRadius = UDim.new(0, 6)
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Text = title
+    titleLabel.Size = UDim2.new(1, -55, 0, 18)
+    titleLabel.Position = UDim2.new(0, 12, 0, 5)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.TextColor3 = color
+    titleLabel.TextSize = 12
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.ZIndex = 10
+    titleLabel.Parent = frame
+
+    local descLabel = Instance.new("TextLabel")
+    descLabel.Text = description
+    descLabel.Size = UDim2.new(1, -55, 0, 14)
+    descLabel.Position = UDim2.new(0, 12, 0, 26)
+    descLabel.BackgroundTransparency = 1
+    descLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
+    descLabel.TextSize = 10
+    descLabel.Font = Enum.Font.Gotham
+    descLabel.TextXAlignment = Enum.TextXAlignment.Left
+    descLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    descLabel.ZIndex = 10
+    descLabel.Parent = frame
+
+    local copyBtn = Instance.new("TextButton")
+    copyBtn.Text = "📋"
+    copyBtn.Size = UDim2.new(0, 30, 0, 30)
+    copyBtn.Position = UDim2.new(1, -35, 0.5, -15)
+    copyBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    copyBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    copyBtn.TextSize = 14
+    copyBtn.Font = Enum.Font.Gotham
+    copyBtn.BorderSizePixel = 0
+    copyBtn.ZIndex = 10
+    copyBtn.Parent = frame
+    Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 6)
+
+    copyBtn.MouseButton1Click:Connect(function()
+        log("INFO", "Copied: " .. description)
+    end)
+end
+
+-- ==================== SCANNING FUNCTIONS ====================
+
+local function scanRemoteEvents(updateUI)
+    log("INFO", "Scanning for RemoteEvents and RemoteFunctions...")
+
+    local root = CONFIG.SCAN_ENTIRE_GAME and game or workspace
+    local allObjects = getDescendantsSafe(root)
+    local remoteEvents = {}
+
+    for _, obj in ipairs(allObjects) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+            if not isWhitelisted(obj.Name) then
+                table.insert(remoteEvents, obj)
+                table.insert(State.REMOTE_EVENTS, obj)
+            end
+        end
+    end
+
+    log("INFO", string.format("Found %d remote events/functions", #remoteEvents))
+
+    if updateUI then
+        statLabels["Remotes"].Text = "Remotes: " .. #State.REMOTE_EVENTS
+        addLogEntry("INFO", string.format("Found %d remote events/functions", #remoteEvents))
+    end
+
+    return remoteEvents
+end
+
+local function testRemoteEvents(remoteEvents)
+    if CONFIG.SAFE_MODE then
+        log("WARN", "Safe mode is ON - skipping remote event testing")
+        addLogEntry("WARN", "Safe mode enabled - remote testing skipped")
+        return
+    end
+
+    log("INFO", "Testing remote events...")
+    local tested = 0
+
+    for _, remote in ipairs(remoteEvents) do
+        safePcall(function()
+            if remote:IsA("RemoteEvent") then
+                remote:FireServer("DarkX_test_payload")
+            elseif remote:IsA("RemoteFunction") then
+                remote:InvokeServer("DarkX_test_payload")
+            end
+            tested = tested + 1
+        end)
+
+        if tested % 10 == 0 then
+            task.wait(0.05)
+        end
+    end
+
+    log("INFO", string.format("Tested %d/%d remotes", tested, #remoteEvents))
+end
+
+local function scanScriptsForPatterns(scripts)
+    log("INFO", "Scanning scripts for suspicious patterns...")
+
+    local patterns = {
+        "loadstring", "require", "game:HttpGet", "hookfunction",
+        "hookmetamethod", "getrawmetatable", "bit32.bxor", "string.char",
+        "getfenv", "setfenv", "debug.setupvalue", "debug.getupvalue",
+        "newcclosure", "checkcaller", "islclosure", "getconnections", "firesignal",
+    }
+
+    for _, pattern in ipairs(CONFIG.BLACKLISTED_PATTERNS) do
+        table.insert(patterns, pattern)
+    end
+
+    local found = 0
+
+    for _, script in ipairs(scripts) do
+        if not script:IsA("LuaSourceContainer") then continue end
+
+        local source = safePcall(function() return script.Source end)
+        if not source or #source < CONFIG.MIN_SCRIPT_LENGTH then continue end
+
+        for _, pattern in ipairs(patterns) do
+            if string.find(source, pattern, 1, true) then
+                table.insert(State.SUSPICIOUS_STRINGS, {
+                    script = script,
+                    pattern = pattern,
+                    type = "pattern_match",
+                    severity = "high"
+                })
+                found = found + 1
+                addResultEntry("suspicious", script.Name, string.format("Pattern '%s' in %s", pattern, script:GetFullName()))
+            end
+        end
+    end
+
+    log("INFO", string.format("Found %d pattern matches", found))
+    return found
+end
+
+local function scanHTTPBackdoors(scripts)
+    log("INFO", "Scanning for HTTP backdoors...")
+    local found = 0
+
+    for _, script in ipairs(scripts) do
+        if not script:IsA("LuaSourceContainer") then continue end
+
+        local source = safePcall(function() return script.Source end)
+        if not source then continue end
+
+        if string.find(source, "HttpService") or string.find(source, "HttpGet") then
+            for url in string.gmatch(source, '["'](https?://[^"']+)["']') do
+                table.insert(State.SUSPICIOUS_STRINGS, {
+                    script = script,
+                    type = "http_url",
+                    url = url,
+                    severity = "critical"
+                })
+                found = found + 1
+                addResultEntry("critical", script.Name, "HTTP URL: " .. url)
+            end
+        end
+    end
+
+    log("INFO", string.format("Found %d HTTP backdoor indicators", found))
+    return found
+end
+
+local function scanObfuscation(scripts)
+    log("INFO", "Scanning for obfuscated scripts...")
+    local found = 0
+
+    for _, script in ipairs(scripts) do
+        if not script:IsA("LuaSourceContainer") then continue end
+
+        local source = safePcall(function() return script.Source end)
+        if not source or #source < CONFIG.MIN_SCRIPT_LENGTH then continue end
+
+        local alreadyFlagged = false
+        for _, item in ipairs(State.SUSPICIOUS_STRINGS) do
+            if item.script == script then
+                alreadyFlagged = true
+                break
+            end
+        end
+        if alreadyFlagged then continue end
+
+        local charCount = {}
+        local totalChars = #source
+
+        for char in string.gmatch(source, ".") do
+            charCount[char] = (charCount[char] or 0) + 1
+        end
+
+        local entropy = 0
+        for _, count in pairs(charCount) do
+            local probability = count / totalChars
+            entropy = entropy - probability * math.log(probability, 2)
+        end
+
+        if entropy > CONFIG.ENTROPY_THRESHOLD then
+            table.insert(State.SUSPICIOUS_STRINGS, {
+                script = script,
+                type = "high_entropy",
+                entropy = entropy,
+                severity = "medium"
+            })
+            found = found + 1
+            addResultEntry("suspicious", script.Name, string.format("High entropy (%.2f)", entropy))
+        end
+    end
+
+    log("INFO", string.format("Found %d obfuscated scripts", found))
+    return found
+end
+
+local function scanModels()
+    log("INFO", "Scanning models for hidden scripts...")
+    local root = CONFIG.SCAN_ENTIRE_GAME and game or workspace
+    local allObjects = getDescendantsSafe(root)
+    local found = 0
+
+    for _, obj in ipairs(allObjects) do
+        if obj:IsA("Model") then
+            for _, child in ipairs(obj:GetChildren()) do
+                if child:IsA("Script") or child:IsA("LocalScript") then
+                    local depth = 0
+                    local parent = obj.Parent
+                    while parent do
+                        depth = depth + 1
+                        parent = parent.Parent
+                    end
+
+                    if depth > 3 then
+                        table.insert(State.SUSPICIOUS_STRINGS, {
+                            script = child,
+                            type = "hidden_script",
+                            depth = depth,
+                            severity = "medium"
+                        })
+                        found = found + 1
+                        addResultEntry("suspicious", child.Name, string.format("Hidden at depth %d", depth))
+                    end
+                end
+            end
+        end
+    end
+
+    log("INFO", string.format("Found %d hidden scripts", found))
+    return found
+end
+
+local function scanAttributes()
+    log("INFO", "Scanning for suspicious attributes...")
+    local root = CONFIG.SCAN_ENTIRE_GAME and game or workspace
+    local allObjects = getDescendantsSafe(root)
+    local found = 0
+
+    for _, obj in ipairs(allObjects) do
+        for _, child in ipairs(obj:GetChildren()) do
+            if child:IsA("StringValue") then
+                local value = child.Value
+                if string.find(value, "Lua") or string.find(value, "loadstring") or string.find(value, "require") then
+                    table.insert(State.SUSPICIOUS_STRINGS, {
+                        object = obj,
+                        attribute = child,
+                        type = "suspicious_value",
+                        severity = "medium"
+                    })
+                    found = found + 1
+                    addResultEntry("suspicious", obj.Name, "Suspicious StringValue: " .. child.Name)
+                end
+            end
+        end
+
+        local attributes = safePcall(function() return obj:GetAttributes() end)
+        if attributes then
+            for attrName, attrValue in pairs(attributes) do
+                if type(attrValue) == "string" then
+                    if string.find(attrValue, "Lua") or string.find(attrValue, "loadstring") then
+                        table.insert(State.SUSPICIOUS_STRINGS, {
+                            object = obj,
+                            attributeName = attrName,
+                            type = "suspicious_attribute",
+                            severity = "medium"
+                        })
+                        found = found + 1
+                        addResultEntry("suspicious", obj.Name, "Suspicious attribute: " .. attrName)
+                    end
+                end
+            end
+        end
+    end
+
+    log("INFO", string.format("Found %d suspicious attributes", found))
+    return found
+end
+
+local function scanParentLocations()
+    log("INFO", "Checking for unusual parent locations...")
+    local blacklistedServices = {"LogService", "Stats", "HttpService", "RunService", "TeleportService", "MarketplaceService"}
+    local root = CONFIG.SCAN_ENTIRE_GAME and game or workspace
+    local allObjects = getDescendantsSafe(root)
+    local found = 0
+
+    for _, obj in ipairs(allObjects) do
+        local parent = obj.Parent
+        if not parent then continue end
+
+        for _, serviceName in ipairs(blacklistedServices) do
+            if parent:IsA(serviceName) then
+                table.insert(State.SUSPICIOUS_STRINGS, {
+                    object = obj,
+                    type = "blacklisted_parent",
+                    parentService = serviceName,
+                    severity = "high"
+                })
+                found = found + 1
+                addResultEntry("critical", obj.Name, "In blacklisted service: " .. serviceName)
+            end
+        end
+    end
+
+    log("INFO", string.format("Found %d objects in unusual locations", found))
+    return found
+end
+
+-- ==================== EXECUTION FUNCTIONS ====================
+
+local function executeLuaCode(code, useBackdoor)
+    if CONFIG.SAFE_MODE then
+        log("WARN", "Safe mode is ON - code execution blocked")
+        execOutput.Text = "❌ Blocked: Safe Mode is enabled"
+        execOutput.TextColor3 = Color3.fromRGB(220, 80, 80)
+        return false
+    end
+
+    if not code or #code == 0 then
+        execOutput.Text = "❌ No code provided"
+        execOutput.TextColor3 = Color3.fromRGB(220, 80, 80)
+        return false
+    end
+
+    log("INFO", "Attempting code execution...")
+    execOutput.Text = "⏳ Executing..."
+    execOutput.TextColor3 = Color3.fromRGB(200, 180, 0)
+
+    if useBackdoor and #State.BACKDOOR_ASSETS > 0 then
+        for _, assetName in ipairs(State.BACKDOOR_ASSETS) do
+            local remote = ReplicatedStorage:FindFirstChild(assetName)
+            if remote and remote:IsA("RemoteEvent") then
+                local success = safePcall(function()
+                    remote:FireServer(code)
+                end)
+                if success then
+                    execOutput.Text = "✅ Executed via backdoor: " .. assetName
+                    execOutput.TextColor3 = Color3.fromRGB(80, 200, 120)
+                    log("INFO", "Code executed via backdoor: " .. assetName)
+                    return true
+                end
+            end
+        end
+    end
+
+    local success, err = safePcall(function()
+        local func = loadstring(code)
+        if func then
+            func()
+        else
+            error("Failed to compile code")
+        end
+    end)
+
+    if success then
+        execOutput.Text = "✅ Code executed successfully"
+        execOutput.TextColor3 = Color3.fromRGB(80, 200, 120)
+        log("INFO", "Code executed via loadstring")
+        return true
+    else
+        execOutput.Text = "❌ Execution failed"
+        execOutput.TextColor3 = Color3.fromRGB(220, 80, 80)
+        log("ERROR", "Execution failed: " .. tostring(err))
+        return false
+    end
+end
+
+-- ==================== MAIN SCAN ====================
+
+local function runFullScan()
+    if State.IS_SCANNING then
+        log("WARN", "Scan already in progress")
+        return
+    end
+
+    State.IS_SCANNING = true
+    State.LAST_SCAN_TIME = tick()
+    clearState()
+
+    log("INFO", "Starting full scan...")
+    statusLabel.Text = "Scanning..."
+    progressFill.Size = UDim2.new(0, 0, 1, 0)
+
+    for _, child in ipairs(resultsScroll:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    if not resultsEmpty then
+        resultsEmpty = Instance.new("TextLabel")
+        resultsEmpty.Text = "No results yet. Run a scan to see findings."
+        resultsEmpty.Size = UDim2.new(1, -10, 0, 60)
+        resultsEmpty.BackgroundTransparency = 1
+        resultsEmpty.TextColor3 = Color3.fromRGB(100, 100, 110)
+        resultsEmpty.TextSize = 12
+        resultsEmpty.Font = Enum.Font.Gotham
+        resultsEmpty.TextWrapped = true
+        resultsEmpty.ZIndex = 10
+        resultsEmpty.Parent = resultsScroll
+    end
+
+    local root = CONFIG.SCAN_ENTIRE_GAME and game or workspace
+    local allObjects = getDescendantsSafe(root)
+    local scripts = {}
+
+    for _, obj in ipairs(allObjects) do
+        if obj:IsA("LuaSourceContainer") then
+            table.insert(scripts, obj)
+        end
+    end
+
+    progressFill.Size = UDim2.new(0.1, 0, 1, 0)
+    local remoteEvents = scanRemoteEvents()
+    testRemoteEvents(remoteEvents)
+    task.wait(0.1)
+
+    progressFill.Size = UDim2.new(0.3, 0, 1, 0)
+    scanScriptsForPatterns(scripts)
+    task.wait(0.1)
+
+    progressFill.Size = UDim2.new(0.5, 0, 1, 0)
+    scanHTTPBackdoors(scripts)
+    task.wait(0.1)
+
+    progressFill.Size = UDim2.new(0.6, 0, 1, 0)
+    scanObfuscation(scripts)
+    task.wait(0.1)
+
+    progressFill.Size = UDim2.new(0.75, 0, 1, 0)
+    scanModels()
+    task.wait(0.1)
+
+    progressFill.Size = UDim2.new(0.9, 0, 1, 0)
+    scanAttributes()
+    task.wait(0.1)
+
+    progressFill.Size = UDim2.new(1, 0, 1, 0)
+    scanParentLocations()
+
+    for _, item in ipairs(State.SUSPICIOUS_STRINGS) do
+        if item.script then
+            table.insert(State.BACKDOOR_ASSETS, item.script.Name)
+        elseif item.object then
+            table.insert(State.BACKDOOR_ASSETS, item.object.Name)
+        end
+    end
+
+    local seen = {}
+    local unique = {}
+    for _, name in ipairs(State.BACKDOOR_ASSETS) do
+        if not seen[name] then
+            seen[name] = true
+            table.insert(unique, name)
+        end
+    end
+    State.BACKDOOR_ASSETS = unique
+
+    State.IS_SCANNING = false
+    statusLabel.Text = string.format("Scan complete - Found %d issues", #State.SUSPICIOUS_STRINGS)
+    progressFill.Size = UDim2.new(0, 0, 1, 0)
+
+    statLabels["Remotes"].Text = "Remotes: " .. #State.REMOTE_EVENTS
+    statLabels["Suspicious"].Text = "Suspicious: " .. #State.SUSPICIOUS_STRINGS
+    statLabels["Backdoors"].Text = "Backdoors: " .. #State.BACKDOOR_ASSETS
+    statLabels["Last Scan"].Text = "Last Scan: Just now"
+
+    log("INFO", string.format("Full scan complete. Found %d suspicious items", #State.SUSPICIOUS_STRINGS))
+end
+
+function scanScriptsOnly()
+    if State.IS_SCANNING then return end
+    State.IS_SCANNING = true
+    clearState()
+
+    for _, child in ipairs(resultsScroll:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+
+    local root = CONFIG.SCAN_ENTIRE_GAME and game or workspace
+    local allObjects = getDescendantsSafe(root)
+    local scripts = {}
+    for _, obj in ipairs(allObjects) do
+        if obj:IsA("LuaSourceContainer") then
+            table.insert(scripts, obj)
+        end
+    end
+
+    scanScriptsForPatterns(scripts)
+    scanHTTPBackdoors(scripts)
+    scanObfuscation(scripts)
+
+    State.IS_SCANNING = false
+    statLabels["Suspicious"].Text = "Suspicious: " .. #State.SUSPICIOUS_STRINGS
+    statLabels["Backdoors"].Text = "Backdoors: " .. #State.BACKDOOR_ASSETS
+end
+
+function clearResults()
+    clearState()
+    for _, child in ipairs(resultsScroll:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    if not resultsEmpty then
+        resultsEmpty = Instance.new("TextLabel")
+        resultsEmpty.Text = "No results yet. Run a scan to see findings."
+        resultsEmpty.Size = UDim2.new(1, -10, 0, 60)
+        resultsEmpty.BackgroundTransparency = 1
+        resultsEmpty.TextColor3 = Color3.fromRGB(100, 100, 110)
+        resultsEmpty.TextSize = 12
+        resultsEmpty.Font = Enum.Font.Gotham
+        resultsEmpty.TextWrapped = true
+        resultsEmpty.ZIndex = 10
+        resultsEmpty.Parent = resultsScroll
+    end
+    statLabels["Remotes"].Text = "Remotes: 0"
+    statLabels["Suspicious"].Text = "Suspicious: 0"
+    statLabels["Backdoors"].Text = "Backdoors: 0"
+    log("INFO", "Results cleared")
+end
+
+-- ==================== EVENT CONNECTIONS ====================
+
+scanBtn.MouseButton1Click:Connect(function()
+    safePcall(runFullScan)
+end)
+
+execBtn.MouseButton1Click:Connect(function()
+    safePcall(function()
+        executeLuaCode(codeBox.Text, false)
+    end)
+end)
+
+execBackdoorBtn.MouseButton1Click:Connect(function()
+    safePcall(function()
+        executeLuaCode(codeBox.Text, true)
+    end)
+end)
+
+clearCodeBtn.MouseButton1Click:Connect(function()
+    codeBox.Text = ""
+    execOutput.Text = "Cleared"
+    execOutput.TextColor3 = Color3.fromRGB(120, 120, 130)
+end)
+
+-- ==================== DRAGGABLE UI ====================
+
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+titleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+    end
+end)
+
+titleBar.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- ==================== INIT ====================
+
+log("INFO", "DarkX initialized")
+log("INFO", "Safe Mode: " .. (CONFIG.SAFE_MODE and "ON" or "OFF"))
+
+safePcall(runFullScan)
