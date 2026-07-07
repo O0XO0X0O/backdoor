@@ -1,345 +1,530 @@
--- [[ GHOST HUNTER v5 — REAL THREAT SCANNER ]] --
-
-local SETTINGS = {
-    Theme       = Color3.fromRGB(255, 0, 150),
-    DangerColor = Color3.fromRGB(255, 60, 60),
-    WarnColor   = Color3.fromRGB(255, 180, 0),
-    OkColor     = Color3.fromRGB(0, 220, 120),
-    BGColor     = Color3.fromRGB(12, 12, 20),
-}
+-- [[ GHOST HUNTER v4 — SIMPLE GUI VERSION FOR MOBILE ]] --
+print("🕵️ Ghost Hunter v4 - Loading...")
 
 local SIGNATURES = {
-    -- CRITICAL SEVERITY (Backdoors, Exploits, Exfiltration)
-    { "require%s*%(%s*%d+%s*%)",                     "Remote require() by ID (Backdoor)",          "HIGH" },
-    { "loadstring%s*%(",                             "Dynamic Code Execution (loadstring)",        "HIGH" },
-    { "HttpService.*GetAsync%s*%(",                  "HTTP GET (Data Exfiltration)",               "HIGH" },
-    { "HttpService.*PostAsync%s*%(",                 "HTTP POST (C2 Command & Control)",           "HIGH" },
-    { "(syn|http)%.request%s*%(",                    "Executor HTTP Request Bypass",               "HIGH" },
-    { "getrenv%s*%(",                                "Roblox Environment Tampering (getrenv)",     "HIGH" },
-    { "getsenv%s*%(",                                "Script Environment Hijacking (getsenv)",     "HIGH" },
-    { "hookmetamethod%s*%(",                         "Metamethod Hooking (Anti-Cheat Bypass)",     "HIGH" },
-    { "hookfunction%s*%(",                           "Native Function Hooking / State Manip.",     "HIGH" },
-    { "clonefunction%s*%(",                          "Function Cloning (Stealth Hooks)",           "HIGH" },
-    { "getrawmetatable%s*%(",                        "Raw Metatable Access (Anti-Cheat Bypass)",   "HIGH" },
-    { "setrawmetatable%s*%(",                        "Raw Metatable Overwrite",                    "HIGH" },
-    { "MarketplaceService.*Prompt%a*Purchase",       "Forced/Fake Microtransaction Prompt",        "HIGH" },
-    { "readfile%s*%(",                               "Local File System Read (Exploit API)",       "HIGH" },
-    { "writefile%s*%(",                              "Local File System Write (Malware Drop)",     "HIGH" },
-    { "csgetprops%s*%(",                             "CSG Property Extraction (Exploit API)",      "HIGH" },
-    
-    -- OBFUSCATION TRAPS (Highly suspicious, usually malicious)
-    { "string%.char%s*%(%s*%d+%s*,%s*%d+%s*,%s*%d+", "Mass string.char Array (Obfuscation)",      "HIGH" },
-    { "\\x%x%x\\x%x%x\\x%x%x",                      "Dense Hex Escapes (Obfuscation)",            "HIGH" },
-    { "\\[%d+\\]%s*=%s*%d+%s*;\\[%d+\\]%s*=%s*%d+", "Virtual Machine Bytecode Table",             "HIGH" },
-    { "table%.concat%s*%(%s*{[%s%d%,]+}",           "table.concat String Builder (Obfuscation)",  "HIGH" },
-    { "bit32%.bxor%s*%(",                            "Bitwise XOR String Decryption",              "HIGH" },
-
-    -- MEDIUM SEVERITY (Suspicious behavior, potential privacy risks)
-    { "pcall%s*%(loadstring",                       "Obscured loadstring Execution",              "MED"  },
-    { "setfenv%s*%(",                                "Environment Modification (setfenv)",         "MED"  },
-    { "getfenv%s*%(%d+%)",                           "Indexed Environment Lookup",                 "MED"  },
-    { "TeleportService.*Teleport",                   "Forced Server Hopping / Redirection",        "MED"  },
-    { "Debug%.setmetatable",                         "Debug Library Manipulation",                 "MED"  },
-    { "\\%d%d%d\\%d%d%d\\%d%d%d",                   "Decimal Escaped Character Obfuscation",      "MED"  },
-    { "Instance%.new%s*%(%s*['\"]Remote",            "Dynamically Created Remote Event/Function",  "MED"  },
+    { "require%s*%(%s*%d+%s*%)",           "Remote require() - Backdoor",       "CRITICAL" },
+    { "loadstring%s*%(",                   "Dynamic code execution",            "CRITICAL" },
+    { "HttpService.*GetAsync%s*%(",        "HTTP GET - Data exfiltration",      "CRITICAL" },
+    { "HttpService.*PostAsync%s*%(",       "HTTP POST - C2",                    "CRITICAL" },
+    { "syn%.request%s*%(",                 "Executor request (syn)",            "CRITICAL" },
+    { "http%.request%s*%(",                "Executor request (http)",           "CRITICAL" },
+    { "getrenv%s*%(",                      "Roblox env tampering",              "CRITICAL" },
+    { "hookmetamethod%s*%(",               "Metamethod hooking",                "CRITICAL" },
+    { "hookfunction%s*%(",                 "Function hooking",                  "CRITICAL" },
+    { "newproxy%s*%(",                     "Proxy creation",                    "CRITICAL" },
+    { "setmetatable%s*%(",                 "Metatable manipulation",            "CRITICAL" },
+    { "MarketplaceService.*Prompt",        "Forced purchase prompt",            "HIGH" },
+    { "string%.char%s*%(%s*%d+%s*%,%s*%d+", "Mass string.char obfuscation",    "HIGH" },
+    { "\\x%x%x\\x%x%x",                    "Hex obfuscation",                   "HIGH" },
+    { "pcall%s*%(loadstring",              "Protected loadstring",              "HIGH" },
+    { "setfenv%s*%(",                      "Environment modification",          "HIGH" },
+    { "getfenv%s*%(",                      "Environment access",                "HIGH" },
+    { "game%.Players%.LocalPlayer",        "LocalPlayer targeting",             "MEDIUM" },
+    { "GetService.*DataStore",             "DataStore access",                  "MEDIUM" },
+    { "TeleportService.*Teleport",         "Server hop exploit",                "MEDIUM" },
 }
 
-local Log = {}
-local highCount, medCount = 0, 0
-local isScanning = false
-local scannedScripts = {}
+local SCAN_AREAS = {
+    QUICK = {
+        { name = "Scripts", getter = function() return getscripts and getscripts() or {} end },
+        { name = "Nil", getter = function() return getnilinstances and getnilinstances() or {} end },
+    },
+    NORMAL = {
+        { name = "Scripts", getter = function() return getscripts and getscripts() or {} end },
+        { name = "Nil", getter = function() return getnilinstances and getnilinstances() or {} end },
+        { name = "Workspace", path = workspace },
+        { name = "ReplicatedStorage", path = game:GetService("ReplicatedStorage") },
+    },
+    DEEP = {
+        { name = "Scripts", getter = function() return getscripts and getscripts() or {} end },
+        { name = "Nil", getter = function() return getnilinstances and getnilinstances() or {} end },
+        { name = "Workspace", path = workspace },
+        { name = "ReplicatedStorage", path = game:GetService("ReplicatedStorage") },
+        { name = "ServerScriptService", path = game:GetService("ServerScriptService") },
+        { name = "StarterPlayer", path = game:GetService("StarterPlayer") },
+    },
+    EXTREME = {
+        { name = "Scripts", getter = function() return getscripts and getscripts() or {} end },
+        { name = "Nil", getter = function() return getnilinstances and getnilinstances() or {} end },
+        { name = "Workspace", path = workspace },
+        { name = "ReplicatedStorage", path = game:GetService("ReplicatedStorage") },
+        { name = "ServerScriptService", path = game:GetService("ServerScriptService") },
+        { name = "StarterPlayer", path = game:GetService("StarterPlayer") },
+        { name = "ServerStorage", path = game:FindService("ServerStorage") },
+    }
+}
 
--- Helper function to create instances with properties
-local function CreateInstance(className, properties, parent)
-    local instance = Instance.new(className)
-    if properties then
-        for prop, value in pairs(properties) do
-            pcall(function() instance[prop] = value end)
-        end
-    end
-    if parent then instance.Parent = parent end
-    return instance
+-- State
+local STATE = {
+    Log = {},
+    Critical = 0,
+    High = 0,
+    Medium = 0,
+    Low = 0,
+    Processed = 0,
+    Total = 0,
+    Scanning = false,
+    Paused = false,
+    StartTime = 0,
+    Settings = {
+        MaxWait = 0.5,
+        Threads = 6,
+        BatchSize = 30,
+        Depth = "DEEP",
+    }
+}
+
+local UI_REFS = {}
+
+-- Get GUI parent
+local function GetGuiParent()
+    if gethui then return gethui() end
+    local player = game:GetService("Players").LocalPlayer
+    if player then return player:WaitForChild("PlayerGui") end
+    return game:GetService("CoreGui")
 end
 
--- Get all scripts in the game
-local function GetAllScripts()
-    local scripts = {}
-    local function traverse(parent)
+print("✓ Initialized")
+
+-- Helpers
+local function SafeDecompile(obj)
+    if not decompile then return nil end
+    local result, done = nil, false
+    task.spawn(function()
         pcall(function()
-            for _, child in pairs(parent:GetChildren()) do
-                if child:IsA("LocalScript") or child:IsA("Script") or child:IsA("ModuleScript") then
-                    table.insert(scripts, child)
-                end
-                traverse(child)
+            if obj and obj:IsA("LuaSourceContainer") then
+                result = decompile(obj)
             end
+            done = true
         end)
+    end)
+    
+    local deadline = os.clock() + STATE.Settings.MaxWait
+    while not done and os.clock() < deadline do
+        task.wait(0.001)
     end
-    traverse(game)
-    return scripts
+    return result
 end
 
--- Scan a script's source code for threats
-local function ScanSource(src, scriptName)
-    if not src or src == "" then
-        return nil
-    end
-    
+local function ScanSource(src)
+    if not src then return nil end
     for _, sig in ipairs(SIGNATURES) do
-        if src:find(sig[1]) then
-            local severity = sig[3]
-            local reason = sig[2]
-            local threat = {
-                severity = severity,
-                reason = reason,
-                script = scriptName,
-                pattern = sig[1],
-                timestamp = os.time()
-            }
-            table.insert(Log, threat)
-            
-            if severity == "HIGH" then
-                highCount = highCount + 1
-            elseif severity == "MED" then
-                medCount = medCount + 1
-            end
-            
-            return severity, reason, threat
+        if string.find(src, sig[1]) then
+            return sig[3], sig[2]
         end
     end
     return nil
 end
 
--- Create the main UI
-local function BuildUI()
-    local sg = CreateInstance("ScreenGui", {
-        Name = "GhostHunter_v5",
-        ResetOnSpawn = false,
-        DisplayOrder = 999
-    }, game:GetService("CoreGui"))
+local function LogThreat(name, path, severity, reason)
+    table.insert(STATE.Log, {name = name, path = path, severity = severity, reason = reason})
+    if severity == "CRITICAL" then STATE.Critical = STATE.Critical + 1
+    elseif severity == "HIGH" then STATE.High = STATE.High + 1
+    elseif severity == "MEDIUM" then STATE.Medium = STATE.Medium + 1
+    else STATE.Low = STATE.Low + 1 end
     
-    local main = CreateInstance("Frame", {
-        Name = "Main",
-        Size = UDim2.new(0, 500, 0, 350),
-        Position = UDim2.new(0.5, -250, 0.5, -175),
-        BackgroundColor3 = SETTINGS.BGColor,
-        BorderSizePixel = 0
-    }, sg)
-    
-    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 12)}, main)
-    CreateInstance("UIStroke", {Color = SETTINGS.Theme, Thickness = 2}, main)
+    print(string.format("🚨 [%s] %s — %s", severity, path, reason))
+end
 
+local function DiscoverScripts(depth)
+    local discovered = {}
+    local seen = {}
+    
+    local areas = SCAN_AREAS[depth] or SCAN_AREAS.NORMAL
+    
+    for _, area in ipairs(areas) do
+        if area.getter then
+            for _, obj in ipairs(area.getter()) do
+                if obj and obj:IsA("LuaSourceContainer") and not seen[obj] then
+                    seen[obj] = true
+                    table.insert(discovered, {obj = obj, path = area.name .. "/" .. obj.Name})
+                end
+            end
+        elseif area.path then
+            pcall(function()
+                for _, descendant in ipairs(area.path:GetDescendants()) do
+                    if descendant:IsA("LuaSourceContainer") and not seen[descendant] then
+                        seen[descendant] = true
+                        table.insert(discovered, {obj = descendant, path = area.name .. "/" .. descendant:GetFullName()})
+                    end
+                end
+            end)
+        end
+    end
+    
+    return discovered
+end
+
+local function UpdateUI()
+    if not UI_REFS.statusLabel then return end
+    
+    local elapsed = STATE.Scanning and (os.time() - STATE.StartTime) or 0
+    local totalThreats = STATE.Critical + STATE.High + STATE.Medium + STATE.Low
+    
+    UI_REFS.statusLabel.Text = string.format("Status: %s | %d / %d", 
+        STATE.Scanning and "SCANNING" or "IDLE", STATE.Processed, STATE.Total)
+    
+    UI_REFS.statsLabel.Text = string.format(
+        "CRITICAL: %d | HIGH: %d | MED: %d | LOW: %d\nElapsed: %ds | Threats: %d",
+        STATE.Critical, STATE.High, STATE.Medium, STATE.Low, elapsed, totalThreats)
+    
+    if UI_REFS.bar then
+        local progress = STATE.Total > 0 and (STATE.Processed / STATE.Total) or 0
+        UI_REFS.bar.Size = UDim2.new(progress, 0, 1, 0)
+    end
+end
+
+local function BuildSimpleUI()
+    print("📍 Building GUI...")
+    
+    local guiParent = GetGuiParent()
+    print("✓ GUI Parent: " .. guiParent.Name)
+    
+    -- Main container
+    local container = Instance.new("ScreenGui")
+    container.Name = "GhostHunterUI"
+    container.ResetOnSpawn = false
+    container.Parent = guiParent
+    
+    -- Background frame
+    local bg = Instance.new("Frame", container)
+    bg.Name = "MainFrame"
+    bg.Size = UDim2.new(0, 300, 0, 500)
+    bg.Position = UDim2.new(0.5, -150, 0.5, -250)
+    bg.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    bg.BorderSizePixel = 1
+    bg.BorderColor3 = Color3.fromRGB(100, 100, 150)
+    
     -- Title
-    local title = CreateInstance("TextLabel", {
-        Name = "Title",
-        Size = UDim2.new(1, 0, 0, 40),
-        BackgroundTransparency = 1,
-        Text = "🔍 GHOST HUNTER v5",
-        TextColor3 = SETTINGS.Theme,
-        Font = Enum.Font.GothamBold,
-        TextSize = 20
-    }, main)
-
-    -- Control Frame
-    local ctrlFrame = CreateInstance("Frame", {
-        Name = "Controls",
-        Size = UDim2.new(1, -20, 0, 60),
-        Position = UDim2.new(0, 10, 0, 50),
-        BackgroundTransparency = 1
-    }, main)
-
-    -- Start Scan Button
-    local btnStart = CreateInstance("TextButton", {
-        Name = "StartBtn",
-        Size = UDim2.new(0.5, -5, 0, 28),
-        Position = UDim2.new(0, 0, 0, 0),
-        Text = "▶ START SCAN",
-        TextColor3 = Color3.new(1, 1, 1),
-        BackgroundColor3 = Color3.fromRGB(50, 150, 100),
-        Font = Enum.Font.GothamBold,
-        TextSize = 12,
-        BorderSizePixel = 0
-    }, ctrlFrame)
-    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 6)}, btnStart)
-
-    -- Clear Log Button
-    local btnClear = CreateInstance("TextButton", {
-        Name = "ClearBtn",
-        Size = UDim2.new(0.5, -5, 0, 28),
-        Position = UDim2.new(0.5, 5, 0, 0),
-        Text = "🗑️ CLEAR LOG",
-        TextColor3 = Color3.new(1, 1, 1),
-        BackgroundColor3 = Color3.fromRGB(100, 100, 120),
-        Font = Enum.Font.GothamBold,
-        TextSize = 12,
-        BorderSizePixel = 0
-    }, ctrlFrame)
-    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 6)}, btnClear)
-
-    -- Status Label
-    local status = CreateInstance("TextLabel", {
-        Name = "Status",
-        Size = UDim2.new(1, -20, 0, 30),
-        Position = UDim2.new(0, 10, 0, 120),
-        Text = "Ready to scan",
-        TextColor3 = SETTINGS.OkColor,
-        BackgroundTransparency = 1,
-        Font = Enum.Font.Gotham,
-        TextSize = 12,
-        TextXAlignment = Enum.TextXAlignment.Left
-    }, main)
-
-    -- Threat Count Display
-    local threatCount = CreateInstance("TextLabel", {
-        Name = "ThreatCount",
-        Size = UDim2.new(1, -20, 0, 50),
-        Position = UDim2.new(0, 10, 0, 155),
-        Text = "🔴 HIGH: 0 | 🟡 MEDIUM: 0\n\nTotal Threats: 0",
-        TextColor3 = Color3.fromRGB(200, 200, 200),
-        BackgroundTransparency = 1,
-        Font = Enum.Font.Gotham,
-        TextSize = 13,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Top
-    }, main)
-
-    -- Log Display (Scrollable)
-    local logFrame = CreateInstance("Frame", {
-        Name = "LogFrame",
-        Size = UDim2.new(1, -20, 0, 110),
-        Position = UDim2.new(0, 10, 0, 220),
-        BackgroundColor3 = Color3.fromRGB(20, 20, 30),
-        BorderSizePixel = 0
-    }, main)
-    CreateInstance("UICorner", {CornerRadius = UDim.new(0, 6)}, logFrame)
-
-    local scrollingFrame = CreateInstance("ScrollingFrame", {
-        Name = "ScrollLog",
-        Size = UDim2.new(1, -10, 1, 0),
-        Position = UDim2.new(0, 5, 0, 0),
-        BackgroundTransparency = 1,
-        ScrollBarThickness = 6,
-        ScrollingDirection = Enum.ScrollingDirection.Y,
-        CanvasSize = UDim2.new(0, 0, 0, 0)
-    }, logFrame)
-    CreateInstance("UIListLayout", {
-        Padding = UDim.new(0, 2),
-        HorizontalAlignment = Enum.HorizontalAlignment.Left,
-        VerticalAlignment = Enum.VerticalAlignment.Top
-    }, scrollingFrame)
-
-    btnClear.MouseButton1Click:Connect(function()
-        Log = {}
-        highCount = 0
-        medCount = 0
-        scannedScripts = {}
-        scrollingFrame:ClearAllChildren()
-        scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-        threatCount.Text = "🔴 HIGH: 0 | 🟡 MEDIUM: 0\n\nTotal Threats: 0"
-        status.TextColor3 = SETTINGS.OkColor
-        status.Text = "Log cleared"
+    local title = Instance.new("TextLabel", bg)
+    title.Size = UDim2.new(1, 0, 0, 40)
+    title.Position = UDim2.new(0, 0, 0, 0)
+    title.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+    title.BorderSizePixel = 0
+    title.Text = "GHOST HUNTER v4"
+    title.TextColor3 = Color3.fromRGB(255, 0, 150)
+    title.TextSize = 16
+    title.Font = Enum.Font.Arial
+    
+    -- Status label
+    local statusLabel = Instance.new("TextLabel", bg)
+    statusLabel.Size = UDim2.new(1, -10, 0, 40)
+    statusLabel.Position = UDim2.new(0, 5, 0, 45)
+    statusLabel.BackgroundTransparency = 1
+    statusLabel.Text = "Status: IDLE | 0 / 0"
+    statusLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+    statusLabel.TextSize = 12
+    statusLabel.Font = Enum.Font.Arial
+    statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    
+    -- Progress bar
+    local barBG = Instance.new("Frame", bg)
+    barBG.Size = UDim2.new(1, -10, 0, 15)
+    barBG.Position = UDim2.new(0, 5, 0, 90)
+    barBG.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    barBG.BorderSizePixel = 1
+    barBG.BorderColor3 = Color3.fromRGB(80, 80, 100)
+    
+    local bar = Instance.new("Frame", barBG)
+    bar.Size = UDim2.new(0, 0, 1, 0)
+    bar.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+    bar.BorderSizePixel = 0
+    
+    -- Stats label
+    local statsLabel = Instance.new("TextLabel", bg)
+    statsLabel.Size = UDim2.new(1, -10, 0, 70)
+    statsLabel.Position = UDim2.new(0, 5, 0, 110)
+    statsLabel.BackgroundTransparency = 1
+    statsLabel.Text = "CRITICAL: 0 | HIGH: 0 | MED: 0 | LOW: 0\nElapsed: 0s | Threats: 0"
+    statsLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    statsLabel.TextSize = 11
+    statsLabel.Font = Enum.Font.Arial
+    statsLabel.TextXAlignment = Enum.TextXAlignment.Left
+    statsLabel.TextYAlignment = Enum.TextYAlignment.Top
+    
+    -- Buttons
+    local btnSize = 70
+    local btnY = 190
+    
+    local startBtn = Instance.new("TextButton", bg)
+    startBtn.Size = UDim2.new(0, btnSize, 0, 35)
+    startBtn.Position = UDim2.new(0, 5, 0, btnY)
+    startBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+    startBtn.BorderSizePixel = 0
+    startBtn.Text = "START"
+    startBtn.TextColor3 = Color3.new(1, 1, 1)
+    startBtn.TextSize = 11
+    startBtn.Font = Enum.Font.Arial
+    
+    local pauseBtn = Instance.new("TextButton", bg)
+    pauseBtn.Size = UDim2.new(0, btnSize, 0, 35)
+    pauseBtn.Position = UDim2.new(0, 80, 0, btnY)
+    pauseBtn.BackgroundColor3 = Color3.fromRGB(200, 150, 50)
+    pauseBtn.BorderSizePixel = 0
+    pauseBtn.Text = "PAUSE"
+    pauseBtn.TextColor3 = Color3.new(1, 1, 1)
+    pauseBtn.TextSize = 11
+    pauseBtn.Font = Enum.Font.Arial
+    
+    local stopBtn = Instance.new("TextButton", bg)
+    stopBtn.Size = UDim2.new(0, btnSize, 0, 35)
+    stopBtn.Position = UDim2.new(0, 155, 0, btnY)
+    stopBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    stopBtn.BorderSizePixel = 0
+    stopBtn.Text = "STOP"
+    stopBtn.TextColor3 = Color3.new(1, 1, 1)
+    stopBtn.TextSize = 11
+    stopBtn.Font = Enum.Font.Arial
+    
+    local clearBtn = Instance.new("TextButton", bg)
+    clearBtn.Size = UDim2.new(0, btnSize, 0, 35)
+    clearBtn.Position = UDim2.new(0, 230, 0, btnY)
+    clearBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    clearBtn.BorderSizePixel = 0
+    clearBtn.Text = "CLEAR"
+    clearBtn.TextColor3 = Color3.new(1, 1, 1)
+    clearBtn.TextSize = 11
+    clearBtn.Font = Enum.Font.Arial
+    
+    -- Depth selector
+    local depthLbl = Instance.new("TextLabel", bg)
+    depthLbl.Size = UDim2.new(0, 80, 0, 25)
+    depthLbl.Position = UDim2.new(0, 5, 0, 235)
+    depthLbl.BackgroundTransparency = 1
+    depthLbl.Text = "Depth:"
+    depthLbl.TextColor3 = Color3.fromRGB(150, 150, 150)
+    depthLbl.TextSize = 11
+    depthLbl.Font = Enum.Font.Arial
+    depthLbl.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local depthBtn = Instance.new("TextButton", bg)
+    depthBtn.Size = UDim2.new(0, 110, 0, 25)
+    depthBtn.Position = UDim2.new(0, 85, 0, 235)
+    depthBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    depthBtn.BorderSizePixel = 1
+    depthBtn.BorderColor3 = Color3.fromRGB(100, 100, 120)
+    depthBtn.Text = STATE.Settings.Depth
+    depthBtn.TextColor3 = Color3.new(1, 1, 1)
+    depthBtn.TextSize = 10
+    depthBtn.Font = Enum.Font.Arial
+    
+    -- Threads selector
+    local threadLbl = Instance.new("TextLabel", bg)
+    threadLbl.Size = UDim2.new(0, 80, 0, 25)
+    threadLbl.Position = UDim2.new(0, 5, 0, 270)
+    threadLbl.BackgroundTransparency = 1
+    threadLbl.Text = "Threads:"
+    threadLbl.TextColor3 = Color3.fromRGB(150, 150, 150)
+    threadLbl.TextSize = 11
+    threadLbl.Font = Enum.Font.Arial
+    threadLbl.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local threadInput = Instance.new("TextBox", bg)
+    threadInput.Size = UDim2.new(0, 50, 0, 25)
+    threadInput.Position = UDim2.new(0, 85, 0, 270)
+    threadInput.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    threadInput.BorderSizePixel = 1
+    threadInput.BorderColor3 = Color3.fromRGB(100, 100, 120)
+    threadInput.Text = tostring(STATE.Settings.Threads)
+    threadInput.TextColor3 = Color3.new(1, 1, 1)
+    threadInput.TextSize = 10
+    threadInput.Font = Enum.Font.Arial
+    
+    threadInput.FocusLost:Connect(function()
+        STATE.Settings.Threads = math.max(1, tonumber(threadInput.Text) or 6)
+        threadInput.Text = tostring(STATE.Settings.Threads)
     end)
-
-    return sg, main, btnStart, status, threatCount, scrollingFrame
+    
+    -- Batch input
+    local batchLbl = Instance.new("TextLabel", bg)
+    batchLbl.Size = UDim2.new(0, 80, 0, 25)
+    batchLbl.Position = UDim2.new(0, 145, 0, 270)
+    batchLbl.BackgroundTransparency = 1
+    batchLbl.Text = "Batch:"
+    batchLbl.TextColor3 = Color3.fromRGB(150, 150, 150)
+    batchLbl.TextSize = 11
+    batchLbl.Font = Enum.Font.Arial
+    batchLbl.TextXAlignment = Enum.TextXAlignment.Left
+    
+    local batchInput = Instance.new("TextBox", bg)
+    batchInput.Size = UDim2.new(0, 50, 0, 25)
+    batchInput.Position = UDim2.new(0, 225, 0, 270)
+    batchInput.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    batchInput.BorderSizePixel = 1
+    batchInput.BorderColor3 = Color3.fromRGB(100, 100, 120)
+    batchInput.Text = tostring(STATE.Settings.BatchSize)
+    batchInput.TextColor3 = Color3.new(1, 1, 1)
+    batchInput.TextSize = 10
+    batchInput.Font = Enum.Font.Arial
+    
+    batchInput.FocusLost:Connect(function()
+        STATE.Settings.BatchSize = math.max(5, tonumber(batchInput.Text) or 30)
+        batchInput.Text = tostring(STATE.Settings.BatchSize)
+    end)
+    
+    -- Report button
+    local reportBtn = Instance.new("TextButton", bg)
+    reportBtn.Size = UDim2.new(1, -10, 0, 30)
+    reportBtn.Position = UDim2.new(0, 5, 0, 305)
+    reportBtn.BackgroundColor3 = Color3.fromRGB(80, 100, 150)
+    reportBtn.BorderSizePixel = 0
+    reportBtn.Text = "SHOW REPORT"
+    reportBtn.TextColor3 = Color3.new(1, 1, 1)
+    reportBtn.TextSize = 12
+    reportBtn.Font = Enum.Font.Arial
+    
+    -- Store references
+    UI_REFS.statusLabel = statusLabel
+    UI_REFS.statsLabel = statsLabel
+    UI_REFS.bar = bar
+    UI_REFS.container = container
+    
+    print("✓ UI Created")
+    
+    return {
+        startBtn = startBtn,
+        pauseBtn = pauseBtn,
+        stopBtn = stopBtn,
+        clearBtn = clearBtn,
+        depthBtn = depthBtn,
+        reportBtn = reportBtn,
+    }
 end
 
--- Real scanning function
-local function StartScan()
-    if isScanning then return end
-    isScanning = true
+local function PrintReport()
+    local totalThreats = STATE.Critical + STATE.High + STATE.Medium + STATE.Low
+    print("\n" .. string.rep("=", 50))
+    print("GHOST HUNTER v4 FINAL REPORT")
+    print(string.rep("=", 50))
+    print(string.format("CRITICAL: %d  |  HIGH: %d", STATE.Critical, STATE.High))
+    print(string.format("MEDIUM: %d  |  LOW: %d", STATE.Medium, STATE.Low))
+    print(string.format("Total Threats: %d", totalThreats))
+    print(string.rep("=", 50))
     
-    local sg, mainFrame, btnStart, status, threatCount, logFrame = BuildUI()
-    btnStart.Disabled = true
-    btnStart.TextColor3 = Color3.fromRGB(150, 150, 150)
-    
-    status.Text = "⏳ Scanning all scripts in game..."
-    status.TextColor3 = SETTINGS.WarnColor
-    
-    -- Get all scripts
-    local allScripts = GetAllScripts()
-    local totalScripts = #allScripts
-    
-    -- Scan each script
-    for i, script in ipairs(allScripts) do
-        status.Text = "⏳ Scanning (" .. i .. "/" .. totalScripts .. ")..."
-        
-        local success, source = pcall(function()
-            return script.Source
-        end)
-        
-        if success and source then
-            local severity, reason, threat = ScanSource(source, script.Name)
-            
-            if threat then
-                -- Add to log display
-                local logEntry = CreateInstance("TextLabel", {
-                    Name = "LogEntry_" .. i,
-                    Size = UDim2.new(1, -20, 0, 50),
-                    BackgroundColor3 = severity == "HIGH" and Color3.fromRGB(40, 20, 20) or Color3.fromRGB(40, 35, 20),
-                    BorderSizePixel = 0,
-                    Text = (severity == "HIGH" and "🔴 " or "🟡 ") .. threat.reason .. "\n📄 " .. threat.script,
-                    TextColor3 = severity == "HIGH" and SETTINGS.DangerColor or SETTINGS.WarnColor,
-                    Font = Enum.Font.Gotham,
-                    TextSize = 11,
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    TextYAlignment = Enum.TextYAlignment.Top,
-                    TextWrapped = true,
-                    Padding = UDim.new(0, 5)
-                }, logFrame)
-                CreateInstance("UICorner", {CornerRadius = UDim.new(0, 4)}, logEntry)
-                
-                -- Update canvas size
-                logFrame.CanvasSize = logFrame.CanvasSize + UDim2.new(0, 0, 0, 52)
-            end
-        end
-        
-        task.wait(0.05) -- Small delay to prevent lag
-    end
-    
-    -- Update threat counts
-    threatCount.Text = "🔴 HIGH: " .. highCount .. " | 🟡 MEDIUM: " .. medCount .. "\n\nTotal Threats: " .. (highCount + medCount)
-    
-    -- Final status
-    if highCount > 0 then
-        status.Text = "⚠️ THREATS DETECTED! " .. highCount .. " high-severity threats found!"
-        status.TextColor3 = SETTINGS.DangerColor
-    elseif medCount > 0 then
-        status.Text = "⚠️ MEDIUM SEVERITY threats found (" .. medCount .. ")"
-        status.TextColor3 = SETTINGS.WarnColor
+    if #STATE.Log == 0 then
+        print("✅ Environment is CLEAN!")
     else
-        status.Text = "✅ CLEAN! No threats detected."
-        status.TextColor3 = SETTINGS.OkColor
-    end
-    
-    btnStart.Disabled = false
-    btnStart.TextColor3 = Color3.new(1, 1, 1)
-    isScanning = false
-    
-    -- Print summary to console
-    print("\n" .. string.rep("=", 60))
-    print("GHOST HUNTER v5 SCAN COMPLETE")
-    print(string.rep("=", 60))
-    print("Total Scripts Scanned: " .. totalScripts)
-    print("🔴 HIGH-SEVERITY Threats: " .. highCount)
-    print("🟡 MEDIUM-SEVERITY Threats: " .. medCount)
-    print(string.rep("=", 60))
-    
-    if highCount > 0 then
-        print("\n⚠️ HIGH-SEVERITY THREATS DETECTED:\n")
-        for _, threat in ipairs(Log) do
-            if threat.severity == "HIGH" then
-                print("  Script: " .. threat.script)
-                print("  Threat: " .. threat.reason)
-                print("  Pattern: " .. threat.pattern)
-                print()
-            end
+        print("\nDETECTED THREATS:\n")
+        for i, entry in ipairs(STATE.Log) do
+            print(string.format("[%d] [%s] %s", i, entry.severity, entry.path))
+            print(string.format("    → %s\n", entry.reason))
         end
     end
+    print()
 end
 
--- ── Boot Sequence ────────────────────────────────────────────────────────────
-local UI, main, btnStart, _, _, _ = BuildUI()
-btnStart.MouseButton1Click:Connect(function()
-    task.spawn(StartScan)
+local function ExecuteScan()
+    print("\n🔍 Discovering scripts (" .. STATE.Settings.Depth .. " depth)...")
+    local discovered = DiscoverScripts(STATE.Settings.Depth)
+    STATE.Total = #discovered
+    STATE.Processed = 0
+    STATE.Scanning = true
+    STATE.Paused = false
+    STATE.StartTime = os.time()
+    
+    print(string.format("📊 Found %d scripts. Starting scan with %d threads...\n", STATE.Total, STATE.Settings.Threads))
+    
+    local currentIdx = 0
+    local activeWorkers = 0
+    local seen = {}
+    
+    local function Worker()
+        while STATE.Scanning do
+            if STATE.Paused then
+                task.wait(0.1)
+                continue
+            end
+            
+            currentIdx = currentIdx + 1
+            local idx = currentIdx
+            if idx > STATE.Total then break end
+            
+            local item = discovered[idx]
+            if item and item.obj and not seen[item.obj] then
+                seen[item.obj] = true
+                
+                local src = SafeDecompile(item.obj)
+                if src and #src >= 5 then
+                    local severity, reason = ScanSource(src)
+                    if severity then
+                        LogThreat(item.obj.Name, item.path, severity, reason)
+                    end
+                end
+            end
+            
+            STATE.Processed = STATE.Processed + 1
+            
+            if STATE.Processed % math.max(1, STATE.Settings.BatchSize) == 0 or STATE.Processed == STATE.Total then
+                UpdateUI()
+                game:GetService("RunService").Heartbeat:Wait()
+            end
+        end
+        
+        activeWorkers = activeWorkers - 1
+    end
+    
+    local threadCount = math.min(STATE.Settings.Threads, STATE.Total)
+    for i = 1, threadCount do
+        activeWorkers = activeWorkers + 1
+        task.spawn(Worker)
+    end
+    
+    task.spawn(function()
+        while activeWorkers > 0 and STATE.Scanning do
+            task.wait(0.5)
+        end
+        
+        STATE.Scanning = false
+        UpdateUI()
+        PrintReport()
+    end)
+end
+
+-- Initialize UI and connect buttons
+print("🚀 Creating UI...")
+local buttons = BuildSimpleUI()
+
+buttons.startBtn.MouseButton1Click:Connect(function()
+    if not STATE.Scanning then
+        ExecuteScan()
+    end
 end)
 
-print("✅ Ghost Hunter v5 loaded! Click 'START SCAN' to begin.")
+buttons.pauseBtn.MouseButton1Click:Connect(function()
+    if STATE.Scanning then
+        STATE.Paused = not STATE.Paused
+        buttons.pauseBtn.Text = STATE.Paused and "RESUME" or "PAUSE"
+    end
+end)
+
+buttons.stopBtn.MouseButton1Click:Connect(function()
+    STATE.Scanning = false
+    print("🛑 Scan stopped.")
+    UpdateUI()
+end)
+
+buttons.clearBtn.MouseButton1Click:Connect(function()
+    STATE.Log = {}
+    STATE.Critical, STATE.High, STATE.Medium, STATE.Low = 0, 0, 0, 0
+    STATE.Processed = 0
+    print("✓ Log cleared.")
+    UpdateUI()
+end)
+
+local depths = {"QUICK", "NORMAL", "DEEP", "EXTREME"}
+local depthIdx = 3
+buttons.depthBtn.MouseButton1Click:Connect(function()
+    depthIdx = depthIdx + 1
+    if depthIdx > 4 then depthIdx = 1 end
+    STATE.Settings.Depth = depths[depthIdx]
+    buttons.depthBtn.Text = STATE.Settings.Depth
+    print("✓ Depth set to: " .. STATE.Settings.Depth)
+end)
+
+buttons.reportBtn.MouseButton1Click:Connect(function()
+    PrintReport()
+end)
+
+print("✅ Ghost Hunter v4 ready!")
+print("📍 Click START button to begin scanning")
+print()
