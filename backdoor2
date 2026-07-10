@@ -1,1276 +1,323 @@
--- DarkX v2 - Security Analysis & Script Scanner
--- Lua 5.1 / Luau compatible, optimized and refactored
-
-local success, err = pcall(function()
-    -- ========== SERVICES ==========
-    local Players = game:GetService("Players")
-    local RunService = game:GetService("RunService")
-    local ReplicatedStorage = game:GetService("ReplicatedStorage")
-    local UserInputService = game:GetService("UserInputService")
-    local HttpService = game:GetService("HttpService")
-    local localPlayer = Players.LocalPlayer
-
-    if not localPlayer then
-        warn("DarkX: No LocalPlayer found")
-        return
-    end
-
-    -- ========== CONFIGURATION ==========
-    local CONFIG = {
-        SAFE_MODE = true,
-        MAX_DEPTH = 100,
-        MAX_OBJECTS = 15000,
-        SCAN_DELAY = 0.02,
-        ENTROPY_THRESHOLD = 4.8,
-        SUSPICIOUS_PATTERNS = {
-            "loadstring", "require", "game:HttpGet", "hookfunction", 
-            "hookmetamethod", "getrawmetatable", "bit32.bxor", 
-            "string.char", "getfenv", "setfenv", "debug.setupvalue", 
-            "newcclosure", "checkcaller", "syn.", "krnl", "fluxus",
-            "getexecutorname", "is_synapse_function", "setclipboard",
-            "writefile", "readfile", "appendfile", "makefolder",
-            "listfiles", "delfile", "delfolder", "loadfile", "dofile"
-        },
-        HTTP_PATTERNS = {
-            "HttpService", "HttpGet", "HttpPost", "RequestAsync",
-            "GetAsync", "PostAsync", "http_request"
-        },
-        OBFUSCATION_PATTERNS = {
-            string.rep("_", 20),
-            "[%z\1-\8\11-\12\14-\31]",
-        },
-        BLACKLIST_PARENTS = {
-            "LogService", "Stats", "HttpService", "RunService", 
-            "TeleportService", "AnalyticsService", "ScriptContext"
-        }
-    }
-
-    -- ========== STATE MANAGEMENT ==========
-    local State = {
-        isScanning = false,
-        isMinimized = false,
-        currentTab = "Scanner",
-        remotes = {},
-        suspicious = {},
-        risks = {},
-        logs = {},
-        connections = {},
-        cache = {
-            descendants = nil,
-            lastCacheTime = 0,
-            cacheDuration = 5
-        }
-    }
-
-    -- ========== UTILITY FUNCTIONS ==========
-    local Utils = {}
-
-    function Utils.addLog(level, msg)
-        local entry = {
-            level = level,
-            msg = msg,
-            time = tick(),
-            timestamp = os.date("%H:%M:%S")
-        }
-        table.insert(State.logs, 1, entry)
-        print(string.format("[DarkX %s] %s", level, msg))
-        return entry
-    end
-
-    function Utils.safeCall(func, ...)
-        local ok, res = pcall(func, ...)
-        if not ok then
-            Utils.addLog("ERROR", tostring(res))
-        end
-        return ok, res
-    end
-
-    function Utils.getDescendants(root, maxDepth)
-        maxDepth = maxDepth or CONFIG.MAX_DEPTH
-        local result = {}
-        local count = 0
-        local queue = {{obj = root, depth = 0}}
-        
-        while #queue > 0 and count < CONFIG.MAX_OBJECTS do
-            local item = table.remove(queue, 1)
-            if item.depth <= maxDepth then
-                table.insert(result, item.obj)
-                count = count + 1
-                
-                local ok, children = pcall(function() return item.obj:GetChildren() end)
-                if ok and children then
-                    for _, child in ipairs(children) do
-                        table.insert(queue, {obj = child, depth = item.depth + 1})
-                    end
-                end
-            end
-        end
-        
-        return result
-    end
-
-    function Utils.getCachedDescendants()
-        local now = tick()
-        if State.cache.descendants and (now - State.cache.lastCacheTime) < State.cache.cacheDuration then
-            return State.cache.descendants
-        end
-        
-        State.cache.descendants = Utils.getDescendants(game)
-        State.cache.lastCacheTime = now
-        return State.cache.descendants
-    end
-
-    function Utils.calculateEntropy(str)
-        if #str < 50 then return 0 end
-        
-        local charCount = {}
-        for i = 1, #str do
-            local char = str:sub(i, i)
-            charCount[char] = (charCount[char] or 0) + 1
-        end
-        
-        local entropy = 0
-        local len = #str
-        for _, count in pairs(charCount) do
-            local prob = count / len
-            entropy = entropy - prob * math.log(prob, 2)
-        end
-        
-        return entropy
-    end
-
-    function Utils.deepCopy(tbl)
-        local copy = {}
-        for k, v in pairs(tbl) do
-            if type(v) == "table" then
-                copy[k] = Utils.deepCopy(v)
-            else
-                copy[k] = v
-            end
-        end
-        return copy
-    end
-
-    -- ========== UI BUILDER ==========
-    local UI = {}
-
-    function UI.createCorner(parent, radius)
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, radius or 8)
-        corner.Parent = parent
-        return corner
-    end
-
-    function UI.createButton(config)
-        local btn = Instance.new("TextButton")
-        btn.Text = config.text or ""
-        btn.Size = config.size or UDim2.new(0, 100, 0, 30)
-        btn.Position = config.position or UDim2.new(0, 0, 0, 0)
-        btn.BackgroundColor3 = config.bgColor or Color3.fromRGB(50, 50, 65)
-        btn.TextColor3 = config.textColor or Color3.fromRGB(255, 255, 255)
-        btn.TextSize = config.textSize or 12
-        btn.Font = config.font or Enum.Font.Gotham
-        btn.BorderSizePixel = 0
-        btn.AutoButtonColor = true
-        btn.Parent = config.parent
-        
-        if config.cornerRadius then
-            UI.createCorner(btn, config.cornerRadius)
-        end
-        
-        if config.callback then
-            local conn = btn.MouseButton1Click:Connect(function()
-                Utils.safeCall(config.callback)
-            end)
-            table.insert(State.connections, conn)
-        end
-        
-        return btn
-    end
-
-    function UI.createLabel(config)
-        local lbl = Instance.new("TextLabel")
-        lbl.Text = config.text or ""
-        lbl.Size = config.size or UDim2.new(1, 0, 0, 20)
-        lbl.Position = config.position or UDim2.new(0, 0, 0, 0)
-        lbl.BackgroundTransparency = 1
-        lbl.TextColor3 = config.textColor or Color3.fromRGB(180, 180, 190)
-        lbl.TextSize = config.textSize or 12
-        lbl.Font = config.font or Enum.Font.Gotham
-        lbl.TextXAlignment = config.align or Enum.TextXAlignment.Left
-        lbl.TextWrapped = config.wrapped or false
-        lbl.Parent = config.parent
-        return lbl
-    end
-
-    -- ========== MAIN GUI SETUP ==========
-    local playerGui = localPlayer:WaitForChild("PlayerGui", 5)
-    if not playerGui then 
-        Utils.addLog("ERROR", "Failed to access PlayerGui")
-        return 
-    end
-
-    local oldGui = playerGui:FindFirstChild("DarkX_GUI")
-    if oldGui then 
-        oldGui:Destroy() 
-    end
-
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "DarkX_GUI"
-    gui.ResetOnSpawn = false
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.Parent = playerGui
-
-    local mainFrame = Instance.new("Frame")
-    mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 520, 0, 420)
-    mainFrame.Position = UDim2.new(0.5, -260, 0.5, -210)
-    mainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
-    mainFrame.BorderSizePixel = 0
-    mainFrame.ClipsDescendants = true
-    mainFrame.Parent = gui
-    UI.createCorner(mainFrame, 12)
-
-    local shadow = Instance.new("ImageLabel")
-    shadow.Name = "Shadow"
-    shadow.AnchorPoint = Vector2.new(0.5, 0.5)
-    shadow.Position = UDim2.new(0.5, 0, 0.5, 0)
-    shadow.Size = UDim2.new(1, 40, 1, 40)
-    shadow.BackgroundTransparency = 1
-    shadow.Image = "rbxassetid://5554236805"
-    shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
-    shadow.ImageTransparency = 0.6
-    shadow.ScaleType = Enum.ScaleType.Slice
-    shadow.SliceCenter = Rect.new(23, 23, 277, 277)
-    shadow.ZIndex = -1
-    shadow.Parent = mainFrame
-
-    local titleBar = Instance.new("Frame")
-    titleBar.Name = "TitleBar"
-    titleBar.Size = UDim2.new(1, 0, 0, 38)
-    titleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
-    titleBar.BorderSizePixel = 0
-    titleBar.Parent = mainFrame
-
-    local titleAccent = Instance.new("Frame")
-    titleAccent.Name = "Accent"
-    titleAccent.Size = UDim2.new(1, 0, 0, 2)
-    titleAccent.Position = UDim2.new(0, 0, 1, -2)
-    titleAccent.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-    titleAccent.BorderSizePixel = 0
-    titleAccent.Parent = titleBar
-
-    UI.createLabel({
-        text = "🔒 DarkX Security Scanner",
-        size = UDim2.new(1, -100, 1, 0),
-        position = UDim2.new(0, 12, 0, 0),
-        textColor = Color3.fromRGB(220, 220, 230),
-        textSize = 14,
-        font = Enum.Font.GothamBold,
-        parent = titleBar
-    })
-
-    local minBtn = UI.createButton({
-        text = "−",
-        size = UDim2.new(0, 36, 0, 38),
-        position = UDim2.new(1, -72, 0, 0),
-        bgColor = Color3.fromRGB(30, 30, 42),
-        textColor = Color3.fromRGB(180, 180, 180),
-        textSize = 18,
-        font = Enum.Font.GothamBold,
-        parent = titleBar,
-        callback = function()
-            State.isMinimized = not State.isMinimized
-            local targetSize = State.isMinimized and UDim2.new(0, 520, 0, 38) or UDim2.new(0, 520, 0, 420)
-            mainFrame:TweenSize(targetSize, Enum.EasingDirection.Out, Enum.EasingStyle.Quart, 0.3, true)
-            minBtn.Text = State.isMinimized and "+" or "−"
-        end
-    })
-
-    local closeBtn = UI.createButton({
-        text = "×",
-        size = UDim2.new(0, 36, 0, 38),
-        position = UDim2.new(1, -36, 0, 0),
-        bgColor = Color3.fromRGB(30, 30, 42),
-        textColor = Color3.fromRGB(220, 80, 80),
-        textSize = 18,
-        font = Enum.Font.GothamBold,
-        parent = titleBar,
-        callback = function()
-            for _, conn in ipairs(State.connections) do
-                if conn then conn:Disconnect() end
-            end
-            gui:Destroy()
-        end
-    })
-
-    local tabBar = Instance.new("Frame")
-    tabBar.Name = "TabBar"
-    tabBar.Size = UDim2.new(1, 0, 0, 34)
-    tabBar.Position = UDim2.new(0, 0, 0, 38)
-    tabBar.BackgroundColor3 = Color3.fromRGB(26, 26, 36)
-    tabBar.BorderSizePixel = 0
-    tabBar.Parent = mainFrame
-
-    local contentFrame = Instance.new("Frame")
-    contentFrame.Name = "Content"
-    contentFrame.Size = UDim2.new(1, -20, 1, -82)
-    contentFrame.Position = UDim2.new(0, 10, 0, 76)
-    contentFrame.BackgroundTransparency = 1
-    contentFrame.Parent = mainFrame
-
-    local tabs = {"Scanner", "Execute", "Results", "Logs"}
-    local tabContents = {}
-    local tabButtons = {}
-
-    for i, name in ipairs(tabs) do
-        local btn = Instance.new("TextButton")
-        btn.Name = name .. "Tab"
-        btn.Text = name
-        btn.Size = UDim2.new(0, 100, 1, 0)
-        btn.Position = UDim2.new(0, (i-1) * 108 + 10, 0, 0)
-        btn.BackgroundColor3 = (name == State.currentTab) and Color3.fromRGB(45, 45, 62) or Color3.fromRGB(26, 26, 36)
-        btn.TextColor3 = (name == State.currentTab) and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(140, 140, 150)
-        btn.TextSize = 13
-        btn.Font = Enum.Font.GothamSemibold
-        btn.BorderSizePixel = 0
-        btn.Parent = tabBar
-        tabButtons[name] = btn
-
-        local indicator = Instance.new("Frame")
-        indicator.Name = "Indicator"
-        indicator.Size = UDim2.new(1, 0, 0, 2)
-        indicator.Position = UDim2.new(0, 0, 1, -2)
-        indicator.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-        indicator.BorderSizePixel = 0
-        indicator.Visible = (name == State.currentTab)
-        indicator.Parent = btn
-
-        local conn = btn.MouseButton1Click:Connect(function()
-            State.currentTab = name
-            for n, b in pairs(tabButtons) do
-                local isActive = (n == name)
-                b.BackgroundColor3 = isActive and Color3.fromRGB(45, 45, 62) or Color3.fromRGB(26, 26, 36)
-                b.TextColor3 = isActive and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(140, 140, 150)
-                b:FindFirstChild("Indicator").Visible = isActive
-            end
-            for n, c in pairs(tabContents) do
-                c.Visible = (n == name)
-            end
-        end)
-        table.insert(State.connections, conn)
-    end
-
-    -- ========== SCANNER TAB ==========
-    local scannerTab = Instance.new("Frame")
-    scannerTab.Name = "Scanner"
-    scannerTab.Size = UDim2.new(1, 0, 1, 0)
-    scannerTab.BackgroundTransparency = 1
-    scannerTab.Visible = true
-    scannerTab.Parent = contentFrame
-    tabContents["Scanner"] = scannerTab
-
-    local progContainer = Instance.new("Frame")
-    progContainer.Name = "ProgressContainer"
-    progContainer.Size = UDim2.new(1, 0, 0, 4)
-    progContainer.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-    progContainer.BorderSizePixel = 0
-    progContainer.Parent = scannerTab
-
-    local progBar = Instance.new("Frame")
-    progBar.Name = "ProgressBar"
-    progBar.Size = UDim2.new(0, 0, 1, 0)
-    progBar.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-    progBar.BorderSizePixel = 0
-    progBar.Parent = progContainer
-
-    local progGradient = Instance.new("UIGradient")
-    progGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 170, 255)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 210, 255))
-    })
-    progGradient.Parent = progBar
-
-    local statusLabel = UI.createLabel({
-        text = "Ready to scan",
-        size = UDim2.new(1, 0, 0, 24),
-        position = UDim2.new(0, 0, 0, 12),
-        textColor = Color3.fromRGB(160, 160, 170),
-        textSize = 13,
-        parent = scannerTab
-    })
-
-    local scanBtn = UI.createButton({
-        text = "▶ Run Full Scan",
-        size = UDim2.new(0, 140, 0, 38),
-        position = UDim2.new(0, 0, 0, 46),
-        bgColor = Color3.fromRGB(0, 130, 210),
-        textSize = 13,
-        font = Enum.Font.GothamBold,
-        cornerRadius = 8,
-        parent = scannerTab,
-        callback = function() Scanner.runFullScan() end
-    })
-
-    local safeBtn = UI.createButton({
-        text = "🛡️ Safe: ON",
-        size = UDim2.new(0, 120, 0, 38),
-        position = UDim2.new(0, 150, 0, 46),
-        bgColor = Color3.fromRGB(40, 140, 80),
-        textSize = 12,
-        font = Enum.Font.GothamBold,
-        cornerRadius = 8,
-        parent = scannerTab,
-        callback = function()
-            CONFIG.SAFE_MODE = not CONFIG.SAFE_MODE
-            safeBtn.Text = CONFIG.SAFE_MODE and "🛡️ Safe: ON" or "⚠️ Safe: OFF"
-            safeBtn.BackgroundColor3 = CONFIG.SAFE_MODE and Color3.fromRGB(40, 140, 80) or Color3.fromRGB(180, 60, 50)
-            Utils.addLog("INFO", "Safe Mode: " .. (CONFIG.SAFE_MODE and "ON" or "OFF"))
-        end
-    })
-
-    UI.createLabel({
-        text = "Quick Actions",
-        size = UDim2.new(1, 0, 0, 20),
-        position = UDim2.new(0, 0, 0, 96),
-        textColor = Color3.fromRGB(120, 120, 130),
-        textSize = 11,
-        font = Enum.Font.GothamSemibold,
-        parent = scannerTab
-    })
-
-    local quickActions = {
-        {text = "Scan Remotes", x = 0, y = 120, callback = function() Scanner.scanRemotes() end},
-        {text = "Scan Scripts", x = 155, y = 120, callback = function() Scanner.scanScriptsOnly() end},
-        {text = "Clear Results", x = 0, y = 158, callback = function() Scanner.clearResults() end},
-        {text = "Test Remotes", x = 155, y = 158, callback = function() Scanner.testRemotes(State.remotes) end}
-    }
-
-    for _, action in ipairs(quickActions) do
-        UI.createButton({
-            text = action.text,
-            size = UDim2.new(0, 145, 0, 32),
-            position = UDim2.new(0, action.x, 0, action.y),
-            bgColor = Color3.fromRGB(38, 38, 52),
-            textColor = Color3.fromRGB(180, 180, 190),
-            textSize = 11,
-            cornerRadius = 6,
-            parent = scannerTab,
-            callback = action.callback
-        })
-    end
-
-    local statsPanel = Instance.new("Frame")
-    statsPanel.Name = "StatsPanel"
-    statsPanel.Size = UDim2.new(1, 0, 0, 100)
-    statsPanel.Position = UDim2.new(0, 0, 1, -100)
-    statsPanel.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-    statsPanel.BorderSizePixel = 0
-    statsPanel.Parent = scannerTab
-    UI.createCorner(statsPanel, 10)
-
-    local statLabels = {}
-    local statConfig = {
-        {name = "Remotes", default = "Remotes: 0"},
-        {name = "Suspicious", default = "Suspicious: 0"},
-        {name = "Risks", default = "Risks: 0"},
-        {name = "Last Scan", default = "Last Scan: Never"}
-    }
-
-    for i, cfg in ipairs(statConfig) do
-        local col = (i - 1) % 2
-        local row = math.floor((i - 1) / 2)
-        local lbl = UI.createLabel({
-            text = cfg.default,
-            size = UDim2.new(0.5, -10, 0, 22),
-            position = UDim2.new(col, 10, 0, 10 + row * 24),
-            textColor = Color3.fromRGB(160, 160, 170),
-            textSize = 12,
-            parent = statsPanel
-        })
-        statLabels[cfg.name] = lbl
-    end
-
-    -- ========== EXECUTE TAB ==========
-    local execTab = Instance.new("Frame")
-    execTab.Name = "Execute"
-    execTab.Size = UDim2.new(1, 0, 1, 0)
-    execTab.BackgroundTransparency = 1
-    execTab.Visible = false
-    execTab.Parent = contentFrame
-    tabContents["Execute"] = execTab
-
-    UI.createLabel({
-        text = "Lua Code Editor",
-        size = UDim2.new(1, 0, 0, 22),
-        textColor = Color3.fromRGB(180, 180, 190),
-        textSize = 13,
-        font = Enum.Font.GothamBold,
-        parent = execTab
-    })
-
-    local codeBox = Instance.new("TextBox")
-    codeBox.Name = "CodeBox"
-    codeBox.Text = "-- Enter your code here\nprint('Hello from DarkX!')"
-    codeBox.Size = UDim2.new(1, 0, 1, -120)
-    codeBox.Position = UDim2.new(0, 0, 0, 26)
-    codeBox.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
-    codeBox.TextColor3 = Color3.fromRGB(220, 220, 230)
-    codeBox.TextSize = 12
-    codeBox.Font = Enum.Font.Code
-    codeBox.TextXAlignment = Enum.TextXAlignment.Left
-    codeBox.TextYAlignment = Enum.TextYAlignment.Top
-    codeBox.ClearTextOnFocus = false
-    codeBox.MultiLine = true
-    codeBox.Parent = execTab
-    UI.createCorner(codeBox, 8)
-
-    local lineNumbers = UI.createLabel({
-        text = "1",
-        size = UDim2.new(0, 24, 1, -120),
-        position = UDim2.new(0, 0, 0, 26),
-        textColor = Color3.fromRGB(80, 80, 90),
-        textSize = 12,
-        font = Enum.Font.Code,
-        align = Enum.TextXAlignment.Right,
-        parent = execTab
-    })
-
-    codeBox:GetPropertyChangedSignal("Text"):Connect(function()
-        local lines = select(2, codeBox.Text:gsub("\n", "\n"))
-        local nums = {}
-        for i = 1, lines + 1 do
-            table.insert(nums, tostring(i))
-        end
-        lineNumbers.Text = table.concat(nums, "\n")
-    end)
-
-    local execBtn = UI.createButton({
-        text = "▶ Execute",
-        size = UDim2.new(0, 120, 0, 36),
-        position = UDim2.new(0, 0, 1, -48),
-        bgColor = Color3.fromRGB(0, 160, 80),
-        textSize = 13,
-        font = Enum.Font.GothamBold,
-        cornerRadius = 8,
-        parent = execTab,
-        callback = function()
-            Executor.execute(codeBox.Text, false)
-        end
-    })
-
-    local execRiskBtn = UI.createButton({
-        text = "🔓 Exec via Risk",
-        size = UDim2.new(0, 170, 0, 36),
-        position = UDim2.new(0, 130, 1, -48),
-        bgColor = Color3.fromRGB(200, 100, 0),
-        textSize = 12,
-        font = Enum.Font.GothamBold,
-        cornerRadius = 8,
-        parent = execTab,
-        callback = function()
-            Executor.execute(codeBox.Text, true)
-        end
-    })
-
-    local clearBtn = UI.createButton({
-        text = "🗑️ Clear",
-        size = UDim2.new(0, 90, 0, 36),
-        position = UDim2.new(1, -90, 1, -48),
-        bgColor = Color3.fromRGB(60, 60, 75),
-        textSize = 12,
-        font = Enum.Font.GothamBold,
-        cornerRadius = 8,
-        parent = execTab,
-        callback = function()
-            codeBox.Text = ""
-            Executor.output("Cleared", "info")
-        end
-    })
-
-    local execOutput = UI.createLabel({
-        text = "Output will appear here...",
-        size = UDim2.new(1, 0, 0, 22),
-        position = UDim2.new(0, 0, 1, -74),
-        textColor = Color3.fromRGB(120, 120, 130),
-        textSize = 11,
-        parent = execTab
-    })
-
-    -- ========== RESULTS TAB ==========
-    local resultsTab = Instance.new("Frame")
-    resultsTab.Name = "Results"
-    resultsTab.Size = UDim2.new(1, 0, 1, 0)
-    resultsTab.BackgroundTransparency = 1
-    resultsTab.Visible = false
-    resultsTab.Parent = contentFrame
-    tabContents["Results"] = resultsTab
-
-    local resultsScroll = Instance.new("ScrollingFrame")
-    resultsScroll.Name = "ResultsScroll"
-    resultsScroll.Size = UDim2.new(1, 0, 1, 0)
-    resultsScroll.BackgroundTransparency = 1
-    resultsScroll.ScrollBarThickness = 6
-    resultsScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 80)
-    resultsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    resultsScroll.Parent = resultsTab
-
-    local resultsList = Instance.new("UIListLayout")
-    resultsList.Padding = UDim.new(0, 6)
-    resultsList.Parent = resultsScroll
-
-    local resultsEmpty = UI.createLabel({
-        text = "No results yet. Run a scan to detect suspicious activity.",
-        size = UDim2.new(1, -10, 0, 60),
-        textColor = Color3.fromRGB(100, 100, 110),
-        textSize = 12,
-        wrapped = true,
-        parent = resultsScroll
-    })
-
-    -- ========== LOGS TAB ==========
-    local logsTab = Instance.new("Frame")
-    logsTab.Name = "Logs"
-    logsTab.Size = UDim2.new(1, 0, 1, 0)
-    logsTab.BackgroundTransparency = 1
-    logsTab.Visible = false
-    logsTab.Parent = contentFrame
-    tabContents["Logs"] = logsTab
-
-    local logsScroll = Instance.new("ScrollingFrame")
-    logsScroll.Name = "LogsScroll"
-    logsScroll.Size = UDim2.new(1, 0, 1, -32)
-    logsScroll.BackgroundTransparency = 1
-    logsScroll.ScrollBarThickness = 6
-    logsScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 80)
-    logsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    logsScroll.Parent = logsTab
-
-    local logsList = Instance.new("UIListLayout")
-    logsList.Padding = UDim.new(0, 4)
-    logsList.Parent = logsScroll
-
-    UI.createButton({
-        text = "Clear Logs",
-        size = UDim2.new(0, 100, 0, 26),
-        position = UDim2.new(1, -105, 1, -28),
-        bgColor = Color3.fromRGB(50, 50, 65),
-        textSize = 11,
-        cornerRadius = 6,
-        parent = logsTab,
-        callback = function()
-            State.logs = {}
-            for _, child in ipairs(logsScroll:GetChildren()) do
-                if child:IsA("TextLabel") then
-                    child:Destroy()
-                end
-            end
-        end
-    })
-
-    -- ========== RESULTS & LOGS HELPERS ==========
-    local function addLogEntry(level, msg)
-        local colors = {
-            ERROR = Color3.fromRGB(255, 90, 90),
-            WARN = Color3.fromRGB(255, 180, 60),
-            INFO = Color3.fromRGB(100, 200, 255),
-            SUCCESS = Color3.fromRGB(100, 255, 150)
-        }
-        
-        local lbl = Instance.new("TextLabel")
-        lbl.Text = string.format("[%s] [%s] %s", os.date("%H:%M:%S"), level, msg)
-        lbl.Size = UDim2.new(1, -10, 0, 20)
-        lbl.BackgroundTransparency = 1
-        lbl.TextColor3 = colors[level] or colors.INFO
-        lbl.TextSize = 11
-        lbl.Font = Enum.Font.Code
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.TextTruncate = Enum.TextTruncate.AtEnd
-        lbl.Parent = logsScroll
-        
-        task.defer(function()
-            logsScroll.CanvasPosition = Vector2.new(0, logsScroll.AbsoluteCanvasSize.Y)
-        end)
-    end
-
-    local function addResultEntry(severity, title, desc, data)
-        local colors = {
-            critical = Color3.fromRGB(255, 60, 60),
-            high = Color3.fromRGB(255, 120, 60),
-            medium = Color3.fromRGB(255, 200, 60),
-            suspicious = Color3.fromRGB(255, 180, 60),
-            info = Color3.fromRGB(100, 180, 255)
-        }
-        local color = colors[severity] or colors.info
-
-        if resultsEmpty and resultsEmpty.Parent then
-            resultsEmpty:Destroy()
-            resultsEmpty = nil
-        end
-
-        local frame = Instance.new("Frame")
-        frame.Size = UDim2.new(1, -10, 0, 56)
-        frame.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
-        frame.BorderSizePixel = 0
-        frame.Parent = resultsScroll
-        UI.createCorner(frame, 8)
-
-        local indicator = Instance.new("Frame")
-        indicator.Size = UDim2.new(0, 4, 1, 0)
-        indicator.BackgroundColor3 = color
-        indicator.BorderSizePixel = 0
-        indicator.Parent = frame
-        UI.createCorner(indicator, 8)
-
-        local titleLbl = UI.createLabel({
-            text = title,
-            size = UDim2.new(1, -60, 0, 20),
-            position = UDim2.new(0, 12, 0, 6),
-            textColor = color,
-            textSize = 12,
-            font = Enum.Font.GothamBold,
-            parent = frame
-        })
-
-        local descLbl = UI.createLabel({
-            text = desc,
-            size = UDim2.new(1, -60, 0, 16),
-            position = UDim2.new(0, 12, 0, 28),
-            textColor = Color3.fromRGB(160, 160, 170),
-            textSize = 10,
-            parent = frame
-        })
-
-        local copyBtn = UI.createButton({
-            text = "📋",
-            size = UDim2.new(0, 36, 0, 28),
-            position = UDim2.new(1, -42, 0.5, -14),
-            bgColor = Color3.fromRGB(45, 45, 60),
-            textSize = 14,
-            cornerRadius = 6,
-            parent = frame,
-            callback = function()
-                if data and data.script then
-                    local path = data.script:GetFullName()
-                    Utils.addLog("INFO", "Copied path: " .. path)
-                end
-            end
-        })
-
-        return frame
-    end
-
-    -- ========== SCANNER MODULE ==========
-    local Scanner = {}
-
-    function Scanner.scanRemotes()
-        Utils.addLog("INFO", "Scanning remotes...")
-        local all = Utils.getCachedDescendants()
-        local found = {}
-        
-        for _, obj in ipairs(all) do
-            if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-                table.insert(found, obj)
-            end
-        end
-        
-        State.remotes = found
-        Utils.addLog("INFO", string.format("Found %d remotes", #found))
-        statLabels["Remotes"].Text = "Remotes: " .. #found
-        return found
-    end
-
-    function Scanner.testRemotes(remotes)
-        if CONFIG.SAFE_MODE then
-            Utils.addLog("WARN", "Safe mode ON - skipping remote tests")
-            return
-        end
-        
-        if not remotes or #remotes == 0 then
-            Utils.addLog("WARN", "No remotes to test")
-            return
-        end
-        
-        Utils.addLog("INFO", "Testing remotes...")
-        local tested = 0
-        local batchSize = 5
-        
-        for i, r in ipairs(remotes) do
-            Utils.safeCall(function()
-                if r:IsA("RemoteEvent") then
-                    r:FireServer("DarkX_test")
-                elseif r:IsA("RemoteFunction") then
-                    r:InvokeServer("DarkX_test")
-                end
-                tested = tested + 1
-            end)
-            
-            if i % batchSize == 0 then
-                task.wait(CONFIG.SCAN_DELAY)
-            end
-        end
-        
-        Utils.addLog("INFO", string.format("Tested %d/%d remotes", tested, #remotes))
-    end
-
-    function Scanner.scanScripts(scripts)
-        Utils.addLog("INFO", "Scanning scripts for suspicious patterns...")
-        local found = 0
-        
-        for _, s in ipairs(scripts) do
-            if s:IsA("LuaSourceContainer") then
-                local ok, source = pcall(function() return s.Source end)
-                if ok and source and #source >= 50 then
-                    for _, pattern in ipairs(CONFIG.SUSPICIOUS_PATTERNS) do
-                        if string.find(source, pattern, 1, true) then
-                            table.insert(State.suspicious, {
-                                script = s,
-                                pattern = pattern,
-                                type = "pattern",
-                                severity = "high"
-                            })
-                            found = found + 1
-                            addResultEntry("high", s.Name, 
-                                string.format("Pattern '%s' detected", pattern),
-                                {script = s})
-                        end
-                    end
-                end
-            end
-        end
-        
-        Utils.addLog("INFO", string.format("Found %d pattern matches", found))
-        return found
-    end
-
-    function Scanner.scanHTTP(scripts)
-        Utils.addLog("INFO", "Scanning for HTTP requests...")
-        local found = 0
-        
-        for _, s in ipairs(scripts) do
-            if s:IsA("LuaSourceContainer") then
-                local ok, source = pcall(function() return s.Source end)
-                if ok and source then
-                    local hasHttp = false
-                    for _, pattern in ipairs(CONFIG.HTTP_PATTERNS) do
-                        if string.find(source, pattern, 1, true) then
-                            hasHttp = true
-                            break
-                        end
-                    end
-                    
-                    if hasHttp then
-                        for url in string.gmatch(source, '["\'](https?://[^"\']+)["\']') do
-                            table.insert(State.suspicious, {
-                                script = s,
-                                type = "http",
-                                url = url,
-                                severity = "critical"
-                            })
-                            found = found + 1
-                            addResultEntry("critical", s.Name, 
-                                "HTTP: " .. url:sub(1, 50),
-                                {script = s})
-                        end
-                    end
-                end
-            end
-        end
-        
-        Utils.addLog("INFO", string.format("Found %d HTTP indicators", found))
-        return found
-    end
-
-    function Scanner.scanObfuscation(scripts)
-        Utils.addLog("INFO", "Scanning for obfuscation...")
-        local found = 0
-        
-        for _, s in ipairs(scripts) do
-            if s:IsA("LuaSourceContainer") then
-                local ok, source = pcall(function() return s.Source end)
-                if ok and source and #source >= 100 then
-                    local alreadyFlagged = false
-                    for _, item in ipairs(State.suspicious) do
-                        if item.script == s then
-                            alreadyFlagged = true
-                            break
-                        end
-                    end
-                    
-                    if not alreadyFlagged then
-                        local entropy = Utils.calculateEntropy(source)
-                        if entropy > CONFIG.ENTROPY_THRESHOLD then
-                            table.insert(State.suspicious, {
-                                script = s,
-                                type = "entropy",
-                                entropy = entropy,
-                                severity = "medium"
-                            })
-                            found = found + 1
-                            addResultEntry("medium", s.Name,
-                                string.format("High entropy: %.2f", entropy),
-                                {script = s})
-                        end
-                    end
-                end
-            end
-        end
-        
-        Utils.addLog("INFO", string.format("Found %d obfuscated scripts", found))
-        return found
-    end
-
-    function Scanner.scanHiddenScripts()
-        Utils.addLog("INFO", "Scanning for hidden scripts...")
-        local found = 0
-        local all = Utils.getCachedDescendants()
-        
-        for _, obj in ipairs(all) do
-            if obj:IsA("Model") or obj:IsA("Folder") then
-                for _, child in ipairs(obj:GetChildren()) do
-                    if child:IsA("Script") or child:IsA("LocalScript") or child:IsA("ModuleScript") then
-                        local depth = 0
-                        local parent = obj.Parent
-                        while parent and parent ~= game do
-                            depth = depth + 1
-                            parent = parent.Parent
-                        end
-                        
-                        if depth > 3 then
-                            table.insert(State.suspicious, {
-                                script = child,
-                                type = "hidden",
-                                depth = depth,
-                                severity = "medium"
-                            })
-                            found = found + 1
-                            addResultEntry("medium", child.Name,
-                                string.format("Hidden at depth %d in %s", depth, obj.Name),
-                                {script = child})
-                        end
-                    end
-                end
-            end
-        end
-        
-        Utils.addLog("INFO", string.format("Found %d hidden scripts", found))
-        return found
-    end
-
-    function Scanner.scanAttributes()
-        Utils.addLog("INFO", "Scanning attributes and values...")
-        local found = 0
-        local all = Utils.getCachedDescendants()
-        
-        for _, obj in ipairs(all) do
-            for _, child in ipairs(obj:GetChildren()) do
-                if child:IsA("StringValue") then
-                    local v = child.Value
-                    if v and (string.find(v, "Lua") or string.find(v, "loadstring") or string.find(v, "require")) then
-                        table.insert(State.suspicious, {
-                            object = obj,
-                            type = "attr",
-                            severity = "medium"
-                        })
-                        found = found + 1
-                        addResultEntry("medium", obj.Name, "Suspicious StringValue content")
-                    end
-                end
-            end
-            
-            local ok, attrs = pcall(function() return obj:GetAttributes() end)
-            if ok and attrs then
-                for name, val in pairs(attrs) do
-                    if type(val) == "string" then
-                        if string.find(val, "Lua") or string.find(val, "loadstring") or string.find(val, "require") then
-                            table.insert(State.suspicious, {
-                                object = obj,
-                                type = "attr2",
-                                severity = "medium"
-                            })
-                            found = found + 1
-                            addResultEntry("medium", obj.Name, "Suspicious attr: " .. name)
-                        end
-                    end
-                end
-            end
-        end
-        
-        Utils.addLog("INFO", string.format("Found %d suspicious attributes", found))
-        return found
-    end
-
-    function Scanner.scanParents()
-        Utils.addLog("INFO", "Checking parent locations...")
-        local found = 0
-        local all = Utils.getCachedDescendants()
-        
-        for _, obj in ipairs(all) do
-            local parent = obj.Parent
-            if parent then
-                for _, svcName in ipairs(CONFIG.BLACKLIST_PARENTS) do
-                    if parent:IsA(svcName) or parent.Name == svcName then
-                        table.insert(State.suspicious, {
-                            object = obj,
-                            type = "parent",
-                            severity = "high"
-                        })
-                        found = found + 1
-                        addResultEntry("critical", obj.Name, "In " .. svcName)
-                    end
-                end
-            end
-        end
-        
-        Utils.addLog("INFO", string.format("Found %d unusual locations", found))
-        return found
-    end
-
-    function Scanner.runFullScan()
-        if State.isScanning then
-            Utils.addLog("WARN", "Scan already in progress")
-            return
-        end
-        
-        State.isScanning = true
-        State.remotes = {}
-        State.suspicious = {}
-        State.risks = {}
-        
-        Utils.addLog("INFO", "Starting full scan...")
-        statusLabel.Text = "Scanning..."
-        progBar.Size = UDim2.new(0, 0, 1, 0)
-        
-        for _, child in ipairs(resultsScroll:GetChildren()) do
-            if child:IsA("Frame") then
-                child:Destroy()
-            end
-        end
-        
-        if not resultsEmpty or not resultsEmpty.Parent then
-            resultsEmpty = UI.createLabel({
-                text = "No results yet. Run a scan.",
-                size = UDim2.new(1, -10, 0, 60),
-                textColor = Color3.fromRGB(100, 100, 110),
-                textSize = 12,
-                wrapped = true,
-                parent = resultsScroll
-            })
-        end
-        
-        local all = Utils.getCachedDescendants()
-        local scripts = {}
-        for _, obj in ipairs(all) do
-            if obj:IsA("LuaSourceContainer") then
-                table.insert(scripts, obj)
-            end
-        end
-        
-        local phases = {
-            {fn = function() return Scanner.scanRemotes() end, weight = 0.15},
-            {fn = function() Scanner.testRemotes(State.remotes) end, weight = 0.05},
-            {fn = function() return Scanner.scanScripts(scripts) end, weight = 0.25},
-            {fn = function() return Scanner.scanHTTP(scripts) end, weight = 0.15},
-            {fn = function() return Scanner.scanObfuscation(scripts) end, weight = 0.15},
-            {fn = function() return Scanner.scanHiddenScripts() end, weight = 0.1},
-            {fn = function() return Scanner.scanAttributes() end, weight = 0.1},
-            {fn = function() return Scanner.scanParents() end, weight = 0.05}
-        }
-        
-        local progress = 0
-        for _, phase in ipairs(phases) do
-            Utils.safeCall(phase.fn)
-            progress = progress + phase.weight
-            progBar.Size = UDim2.new(progress, 0, 1, 0)
-            task.wait(CONFIG.SCAN_DELAY)
-        end
-        
-        local seen = {}
-        for _, item in ipairs(State.suspicious) do
-            local name = item.script and item.script.Name or (item.object and item.object.Name)
-            if name and not seen[name] then
-                seen[name] = true
-                table.insert(State.risks, name)
-            end
-        end
-        
-        State.isScanning = false
-        statusLabel.Text = string.format("Done - %d issues found", #State.suspicious)
-        progBar.Size = UDim2.new(0, 0, 1, 0)
-        
-        statLabels["Remotes"].Text = "Remotes: " .. #State.remotes
-        statLabels["Suspicious"].Text = "Suspicious: " .. #State.suspicious
-        statLabels["Risks"].Text = "Risks: " .. #State.risks
-        statLabels["Last Scan"].Text = "Last Scan: " .. os.date("%H:%M:%S")
-        
-        Utils.addLog("SUCCESS", string.format("Scan complete. %d issues found", #State.suspicious))
-    end
-
-    function Scanner.scanScriptsOnly()
-        if State.isScanning then return end
-        State.isScanning = true
-        State.suspicious = {}
-        
-        for _, child in ipairs(resultsScroll:GetChildren()) do
-            if child:IsA("Frame") then
-                child:Destroy()
-            end
-        end
-        
-        local all = Utils.getCachedDescendants()
-        local scripts = {}
-        for _, obj in ipairs(all) do
-            if obj:IsA("LuaSourceContainer") then
-                table.insert(scripts, obj)
-            end
-        end
-        
-        Scanner.scanScripts(scripts)
-        Scanner.scanHTTP(scripts)
-        Scanner.scanObfuscation(scripts)
-        
-        State.isScanning = false
-        statLabels["Suspicious"].Text = "Suspicious: " .. #State.suspicious
-        statLabels["Risks"].Text = "Risks: " .. #State.risks
-    end
-
-    function Scanner.clearResults()
-        State.suspicious = {}
-        State.risks = {}
-        State.remotes = {}
-        
-        for _, child in ipairs(resultsScroll:GetChildren()) do
-            if child:IsA("Frame") then
-                child:Destroy()
-            end
-        end
-        
-        if not resultsEmpty or not resultsEmpty.Parent then
-            resultsEmpty = UI.createLabel({
-                text = "No results yet. Run a scan.",
-                size = UDim2.new(1, -10, 0, 60),
-                textColor = Color3.fromRGB(100, 100, 110),
-                textSize = 12,
-                wrapped = true,
-                parent = resultsScroll
-            })
-        end
-        
-        statLabels["Remotes"].Text = "Remotes: 0"
-        statLabels["Suspicious"].Text = "Suspicious: 0"
-        statLabels["Risks"].Text = "Risks: 0"
-        Utils.addLog("INFO", "Results cleared")
-    end
-
-    -- ========== EXECUTOR MODULE ==========
-    local Executor = {}
-
-    function Executor.output(text, type)
-        local colors = {
-            success = Color3.fromRGB(80, 200, 120),
-            error = Color3.fromRGB(220, 80, 80),
-            info = Color3.fromRGB(120, 120, 130),
-            warning = Color3.fromRGB(200, 180, 0)
-        }
-        execOutput.Text = text
-        execOutput.TextColor3 = colors[type] or colors.info
-    end
-
-    function Executor.execute(code, useRisk)
-        if CONFIG.SAFE_MODE then
-            Executor.output("Blocked: Safe Mode is ON", "error")
-            return false
-        end
-        
-        if not code or #code == 0 then
-            Executor.output("No code provided", "error")
-            return false
-        end
-        
-        Executor.output("Executing...", "warning")
-        
-        if useRisk and #State.risks > 0 then
-            for _, name in ipairs(State.risks) do
-                local remote = ReplicatedStorage:FindFirstChild(name)
-                if remote and remote:IsA("RemoteEvent") then
-                    local ok = Utils.safeCall(function() 
-                        remote:FireServer(code) 
-                    end)
-                    if ok then
-                        Executor.output("Executed via risk: " .. name, "success")
-                        Utils.addLog("SUCCESS", "Code executed via risk: " .. name)
-                        return true
-                    end
-                end
-            end
-            Executor.output("Risk execution failed, falling back...", "warning")
-        end
-        
-        local ok = Utils.safeCall(function()
-            local f = loadstring(code)
-            if f then 
-                f() 
-                return true
-            end
-            return false
-        end)
-        
-        if ok then
-            Executor.output("Code executed successfully", "success")
-            Utils.addLog("SUCCESS", "Code executed locally")
-            return true
-        else
-            Executor.output("Execution failed - check logs", "error")
-            return false
-        end
-    end
-
-    -- ========== DRAGGABLE WINDOW ==========
-    local dragging = false
-    local dragStart = nil
-    local startPos = nil
-
-    local dragConn1 = titleBar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or 
-           input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = mainFrame.Position
-        end
-    end)
-    table.insert(State.connections, dragConn1)
-
-    local dragConn2 = titleBar.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or 
-           input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-    table.insert(State.connections, dragConn2)
-
-    local dragConn3 = UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or 
-                        input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            mainFrame.Position = UDim2.new(
-                startPos.X.Scale, 
-                startPos.X.Offset + delta.X, 
-                startPos.Y.Scale, 
-                startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
-    table.insert(State.connections, dragConn3)
-
-    -- ========== INITIALIZATION ==========
-    Utils.addLog("INFO", "DarkX v2 loaded successfully")
-    Utils.addLog("INFO", "Safe Mode: " .. (CONFIG.SAFE_MODE and "ON" or "OFF"))
-    
-    task.delay(0.5, function()
-        Utils.safeCall(Scanner.runFullScan)
-    end)
-end)
-
-if not success then
-    warn("DarkX failed to initialize: " .. tostring(err))
+--[[
+    ╔══════════════════════════════════════════════════════════╗
+    ║          SS Roblox Backdoor Scanner & Executor           ║
+    ║          Server-Side Script (Script / SS Executor)       ║
+    ╚══════════════════════════════════════════════════════════╝
+
+    Features:
+      • Deep recursive scan across the entire game tree
+      • Heuristic detection of suspicious RemoteEvent/RemoteFunction names
+      • Checks for loadstring usage in scripts (source scanning)
+      • Safe sandboxed execution via pcall
+      • Detailed logging with severity levels
+      • Firewall mode: block suspicious remotes from being fired externally
+--]]
+
+-- ─── CONFIG ──────────────────────────────────────────────────────────────────
+
+local CONFIG = {
+    -- Names that are commonly used for backdoors
+    SUSPICIOUS_NAMES = {
+        "backdoor", "bd", "cmd", "exec", "execute", "run",
+        "eval", "load", "sys", "shell", "admin_cmd", "remote_exec",
+        "btools", "kill", "exploit", "hack", "inject",
+    },
+
+    -- Services to scan recursively
+    SCAN_SERVICES = {
+        game:GetService("Workspace"),
+        game:GetService("ReplicatedStorage"),
+        game:GetService("ReplicatedFirst"),
+        game:GetService("ServerStorage"),
+        game:GetService("ServerScriptService"),
+        game:GetService("StarterGui"),
+        game:GetService("StarterPack"),
+        game:GetService("StarterPlayer"),
+        game:GetService("Lighting"),
+        game:GetService("Teams"),
+        game:GetService("SoundService"),
+        game:GetService("Chat"),
+    },
+
+    -- Whether to attempt source scanning for loadstring patterns
+    SCAN_SCRIPTS     = true,
+
+    -- Whether to block (disconnect) suspicious remotes automatically
+    FIREWALL_MODE    = false,
+
+    -- Print all found remotes, not just suspicious ones
+    VERBOSE          = true,
+}
+
+-- ─── LOGGING ─────────────────────────────────────────────────────────────────
+
+local LOG_PREFIX = "[BackdoorScanner]"
+
+local function log(level, ...)
+    local tag = ({
+        INFO  = "i  INFO",
+        WARN  = "!  WARN",
+        CRIT  = "!! CRIT",
+        OK    = "OK OK",
+        EXEC  = ">> EXEC",
+    })[level] or "   "
+    print(LOG_PREFIX, tag, ...)
 end
+
+-- ─── UTILITIES ───────────────────────────────────────────────────────────────
+
+-- Case-insensitive substring check against the suspicious name list
+local function isSuspiciousName(name)
+    local lower = name:lower()
+    for _, keyword in ipairs(CONFIG.SUSPICIOUS_NAMES) do
+        if lower:find(keyword, 1, true) then
+            return true, keyword
+        end
+    end
+    return false, nil
+end
+
+-- Recursively collect all descendants of a given instance
+local function getDescendantsRecursive(root, results)
+    results = results or {}
+    local ok, children = pcall(function() return root:GetChildren() end)
+    if not ok then return results end
+    for _, child in ipairs(children) do
+        table.insert(results, child)
+        getDescendantsRecursive(child, results)
+    end
+    return results
+end
+
+-- Attempt to read a script's Source to check for loadstring/require abuse
+local function scanScriptSource(script)
+    local flags = {}
+    local ok, source = pcall(function() return script.Source end)
+    if not ok or type(source) ~= "string" then return flags end
+
+    local patterns = {
+        { pattern = "loadstring%s*%(", label = "loadstring()" },
+        { pattern = "require%s*%(",    label = "require()" },
+        { pattern = "getfenv%s*%(",    label = "getfenv()" },
+        { pattern = "setfenv%s*%(",    label = "setfenv()" },
+        { pattern = "HttpService",     label = "HttpService" },
+        { pattern = "game%.HttpGet",   label = "game:HttpGet" },
+    }
+
+    for _, entry in ipairs(patterns) do
+        if source:find(entry.pattern) then
+            table.insert(flags, entry.label)
+        end
+    end
+    return flags
+end
+
+-- ─── SCANNER ─────────────────────────────────────────────────────────────────
+
+local ScanResults = {
+    allRemotes        = {},  -- { instance, service, isSuspicious, keyword }
+    suspiciousScripts = {},
+}
+
+local function scanService(service)
+    local all = getDescendantsRecursive(service)
+
+    for _, inst in ipairs(all) do
+        -- ── Remote detection ──────────────────────────────────────────────
+        if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
+            local suspicious, keyword = isSuspiciousName(inst.Name)
+            local entry = {
+                instance     = inst,
+                service      = service.Name,
+                path         = inst:GetFullName(),
+                class        = inst.ClassName,
+                isSuspicious = suspicious,
+                keyword      = keyword,
+            }
+            table.insert(ScanResults.allRemotes, entry)
+
+            if suspicious then
+                log("CRIT", string.format(
+                    "Suspicious %s: '%s' (matched: '%s') @ %s",
+                    inst.ClassName, inst.Name, keyword, inst:GetFullName()
+                ))
+            elseif CONFIG.VERBOSE then
+                log("INFO", string.format(
+                    "Found %s: '%s' @ %s",
+                    inst.ClassName, inst.Name, inst:GetFullName()
+                ))
+            end
+        end
+
+        -- ── Script source scanning ────────────────────────────────────────
+        if CONFIG.SCAN_SCRIPTS and (
+            inst:IsA("Script") or
+            inst:IsA("LocalScript") or
+            inst:IsA("ModuleScript")
+        ) then
+            local flags = scanScriptSource(inst)
+            if #flags > 0 then
+                local entry = {
+                    instance = inst,
+                    path     = inst:GetFullName(),
+                    flags    = flags,
+                }
+                table.insert(ScanResults.suspiciousScripts, entry)
+                log("WARN", string.format(
+                    "Suspicious script '%s' @ %s -- uses: %s",
+                    inst.Name, inst:GetFullName(), table.concat(flags, ", ")
+                ))
+            end
+        end
+    end
+end
+
+-- ─── EXECUTOR ────────────────────────────────────────────────────────────────
+
+--[[
+    Safely fire a RemoteEvent or invoke a RemoteFunction with a payload.
+    Uses pcall for error isolation.
+
+    @param remote   Instance   The RemoteEvent or RemoteFunction to use
+    @param payload  string     Lua code string to send as the payload
+    @param timeout  number?    Timeout in seconds for RemoteFunction (default 5)
+--]]
+local function executeViaRemote(remote, payload, timeout)
+    timeout = timeout or 5
+    log("EXEC", string.format("Attempting execution via '%s' (%s)", remote.Name, remote.ClassName))
+
+    if remote:IsA("RemoteEvent") then
+        local ok, err = pcall(function()
+            remote:FireServer(payload)
+        end)
+        if ok then
+            log("OK", "FireServer succeeded.")
+        else
+            log("WARN", "FireServer failed: " .. tostring(err))
+        end
+
+    elseif remote:IsA("RemoteFunction") then
+        local ok, result = pcall(function()
+            return remote:InvokeServer(payload)
+        end)
+        if ok then
+            log("OK", "InvokeServer succeeded. Result: " .. tostring(result))
+        else
+            log("WARN", "InvokeServer failed: " .. tostring(result))
+        end
+    end
+end
+
+-- ─── FIREWALL ────────────────────────────────────────────────────────────────
+
+-- Neuters a suspicious remote by absorbing all calls and detaching it from the tree
+local function firewallRemote(entry)
+    local remote = entry.instance
+
+    if remote:IsA("RemoteEvent") then
+        local ok, err = pcall(function()
+            remote.OnServerEvent:Connect(function() end)
+            remote.Parent = nil
+        end)
+        if ok then
+            log("OK", "Firewalled RemoteEvent: " .. entry.path)
+        else
+            log("WARN", "Could not firewall '" .. entry.path .. "': " .. tostring(err))
+        end
+
+    elseif remote:IsA("RemoteFunction") then
+        local ok, err = pcall(function()
+            remote.OnServerInvoke = function() return nil end
+            remote.Parent = nil
+        end)
+        if ok then
+            log("OK", "Firewalled RemoteFunction: " .. entry.path)
+        else
+            log("WARN", "Could not firewall '" .. entry.path .. "': " .. tostring(err))
+        end
+    end
+end
+
+-- ─── REPORT ──────────────────────────────────────────────────────────────────
+
+local function printReport()
+    local sep = string.rep("-", 60)
+    print("\n" .. sep)
+    print(LOG_PREFIX .. " SCAN REPORT")
+    print(sep)
+
+    local suspiciousCount = 0
+    for _, r in ipairs(ScanResults.allRemotes) do
+        if r.isSuspicious then suspiciousCount += 1 end
+    end
+
+    print(string.format("  Total remotes found:       %d", #ScanResults.allRemotes))
+    print(string.format("  Suspicious remotes:        %d", suspiciousCount))
+    print(string.format("  Flagged scripts:           %d", #ScanResults.suspiciousScripts))
+    print(sep)
+
+    if suspiciousCount > 0 then
+        print("  [!!] SUSPICIOUS REMOTES:")
+        for _, r in ipairs(ScanResults.allRemotes) do
+            if r.isSuspicious then
+                print(string.format("    [%s] %s  (keyword: '%s')", r.class, r.path, r.keyword))
+            end
+        end
+        print(sep)
+    end
+
+    if #ScanResults.suspiciousScripts > 0 then
+        print("  [!] FLAGGED SCRIPTS:")
+        for _, s in ipairs(ScanResults.suspiciousScripts) do
+            print(string.format("    %s  --  %s", s.path, table.concat(s.flags, ", ")))
+        end
+        print(sep)
+    end
+
+    if suspiciousCount == 0 and #ScanResults.suspiciousScripts == 0 then
+        print("  [OK] No obvious backdoors detected.")
+    end
+
+    print(sep .. "\n")
+end
+
+-- ─── MAIN ────────────────────────────────────────────────────────────────────
+
+local function main()
+    log("INFO", "Starting deep backdoor scan...")
+
+    for _, service in ipairs(CONFIG.SCAN_SERVICES) do
+        local ok, err = pcall(scanService, service)
+        if not ok then
+            log("WARN", string.format("Failed to scan service '%s': %s", service.Name, tostring(err)))
+        end
+    end
+
+    printReport()
+
+    -- Optional: firewall all suspicious remotes automatically
+    if CONFIG.FIREWALL_MODE then
+        log("INFO", "FIREWALL_MODE enabled -- neutralising suspicious remotes...")
+        for _, entry in ipairs(ScanResults.allRemotes) do
+            if entry.isSuspicious then
+                firewallRemote(entry)
+            end
+        end
+    end
+
+    --[[
+        To execute a payload via the first suspicious remote found, uncomment:
+
+        for _, entry in ipairs(ScanResults.allRemotes) do
+            if entry.isSuspicious then
+                executeViaRemote(entry.instance, "print('payload executed')")
+                break
+            end
+        end
+    --]]
+
+    log("INFO", "Scan complete.")
+    return ScanResults
+end
+
+return main()
