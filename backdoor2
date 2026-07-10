@@ -1,323 +1,1403 @@
 --[[
-    ╔══════════════════════════════════════════════════════════╗
-    ║          SS Roblox Backdoor Scanner & Executor           ║
-    ║          Server-Side Script (Script / SS Executor)       ║
-    ╚══════════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║            SS Roblox Backdoor Scanner & Executor  v2.0              ║
+    ║                   Full GUI Edition  —  LocalScript                  ║
+    ╚══════════════════════════════════════════════════════════════════════╝
+
+    TABS:  Scanner  |  Executor  |  Console  |  Firewall  |  Settings
 
     Features:
-      • Deep recursive scan across the entire game tree
-      • Heuristic detection of suspicious RemoteEvent/RemoteFunction names
-      • Checks for loadstring usage in scripts (source scanning)
-      • Safe sandboxed execution via pcall
-      • Detailed logging with severity levels
-      • Firewall mode: block suspicious remotes from being fired externally
+      • Draggable dark-themed ScreenGui with open/close animation
+      • Deep recursive scan across 12+ game services
+      • 26 suspicious keyword heuristics
+      • Script source analysis — 10 dangerous pattern checks
+      • Color-coded results (red=crit, yellow=warn, green=clean)
+      • Per-row action buttons: Firewall, Select, Copy Path
+      • Payload library with 10 prebuilt payloads
+      • Execution history (configurable, default 10 entries)
+      • Live remote monitor via DescendantAdded on all services
+      • One-click firewall: absorb + detach suspicious remotes
+      • Full console with timestamps, level filtering
+      • Settings panel with live config editing + toggle switches
+
+    NOTE: Run as LocalScript inside a Script executor (e.g. SS executor).
+          Firewall hooks (OnServerEvent/OnServerInvoke) only apply server-side.
 --]]
 
--- ─── CONFIG ──────────────────────────────────────────────────────────────────
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 1 — SERVICES & LOCALS
+-- ════════════════════════════════════════════════════════════════════════════
+
+local Players          = game:GetService("Players")
+local TweenService     = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 2 — CONFIGURATION
+-- ════════════════════════════════════════════════════════════════════════════
 
 local CONFIG = {
-    -- Names that are commonly used for backdoors
+    VERSION = "2.0.0",
+
+    -- Remote names containing any of these keywords are flagged
     SUSPICIOUS_NAMES = {
-        "backdoor", "bd", "cmd", "exec", "execute", "run",
-        "eval", "load", "sys", "shell", "admin_cmd", "remote_exec",
-        "btools", "kill", "exploit", "hack", "inject",
+        "backdoor", "bd", "cmd", "exec", "execute", "run", "eval",
+        "load", "sys", "shell", "admin_cmd", "remote_exec", "btools",
+        "kill", "exploit", "hack", "inject", "bypass", "script_exec",
+        "server_cmd", "luaexec", "loadscript", "remoteexploit", "rce",
+        "getscript", "remotecmd",
     },
 
-    -- Services to scan recursively
+    -- Script source patterns that indicate potentially dangerous code
+    DANGEROUS_PATTERNS = {
+        { pattern = "loadstring%s*%(",  label = "loadstring()",    severity = "CRIT" },
+        { pattern = "getfenv%s*%(",     label = "getfenv()",       severity = "WARN" },
+        { pattern = "setfenv%s*%(",     label = "setfenv()",       severity = "WARN" },
+        { pattern = "require%s*%(",     label = "require()",       severity = "INFO" },
+        { pattern = "HttpService",      label = "HttpService",     severity = "WARN" },
+        { pattern = "game%.HttpGet",    label = "game:HttpGet",    severity = "WARN" },
+        { pattern = "_G%s*%[",          label = "_G[] abuse",      severity = "WARN" },
+        { pattern = "shared%s*%[",      label = "shared[] abuse",  severity = "WARN" },
+        { pattern = "getgenv",          label = "getgenv()",       severity = "CRIT" },
+        { pattern = "syn%.request",     label = "syn.request()",   severity = "CRIT" },
+    },
+
+    -- Services scanned recursively
     SCAN_SERVICES = {
-        game:GetService("Workspace"),
-        game:GetService("ReplicatedStorage"),
-        game:GetService("ReplicatedFirst"),
-        game:GetService("ServerStorage"),
-        game:GetService("ServerScriptService"),
-        game:GetService("StarterGui"),
-        game:GetService("StarterPack"),
-        game:GetService("StarterPlayer"),
-        game:GetService("Lighting"),
-        game:GetService("Teams"),
-        game:GetService("SoundService"),
-        game:GetService("Chat"),
+        "Workspace", "ReplicatedStorage", "ReplicatedFirst",
+        "ServerStorage", "ServerScriptService", "StarterGui",
+        "StarterPack", "StarterPlayer", "Lighting",
+        "Teams", "SoundService", "Chat",
     },
 
-    -- Whether to attempt source scanning for loadstring patterns
-    SCAN_SCRIPTS     = true,
-
-    -- Whether to block (disconnect) suspicious remotes automatically
-    FIREWALL_MODE    = false,
-
-    -- Print all found remotes, not just suspicious ones
-    VERBOSE          = true,
+    SCAN_SCRIPTS     = true,   -- scan Script/LocalScript/ModuleScript sources
+    VERBOSE          = true,   -- show all remotes, not just suspicious
+    FIREWALL_MODE    = false,  -- auto-firewall suspicious on scan
+    LIVE_MONITOR     = true,   -- watch for new remotes at runtime
+    MAX_EXEC_HISTORY = 10,     -- max entries in execution history
+    INVOKE_TIMEOUT   = 5,      -- seconds before InvokeServer gives up
 }
 
--- ─── LOGGING ─────────────────────────────────────────────────────────────────
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 3 — COLOUR THEME
+-- ════════════════════════════════════════════════════════════════════════════
 
-local LOG_PREFIX = "[BackdoorScanner]"
+local T = {
+    BG_PRI   = Color3.fromRGB(13,  13,  18 ),
+    BG_SEC   = Color3.fromRGB(20,  20,  28 ),
+    BG_TER   = Color3.fromRGB(28,  28,  40 ),
+    BG_HOV   = Color3.fromRGB(38,  38,  55 ),
+    ACC      = Color3.fromRGB(99,  102, 241),
+    ACC_HOV  = Color3.fromRGB(129, 132, 255),
+    ACC_DIM  = Color3.fromRGB(55,  58,  145),
+    TXT      = Color3.fromRGB(238, 238, 255),
+    TXT_SEC  = Color3.fromRGB(155, 155, 188),
+    TXT_MUT  = Color3.fromRGB( 90,  90, 120),
+    CRIT     = Color3.fromRGB(239,  68,  68),
+    WARN     = Color3.fromRGB(234, 179,   8),
+    OK       = Color3.fromRGB( 34, 197,  94),
+    INFO     = Color3.fromRGB( 99, 102, 241),
+    BORDER   = Color3.fromRGB( 45,  45,  65),
+    SCROLL   = Color3.fromRGB( 55,  55,  78),
+    BTN_RED  = Color3.fromRGB(180,  28,  28),
+    BTN_GRN  = Color3.fromRGB( 21, 120,  58),
+    BTN_BLU  = Color3.fromRGB( 29,  78, 216),
+    BTN_ORA  = Color3.fromRGB(175,  95,  15),
+    TITLE    = Color3.fromRGB(16,  16,  24 ),
+    TAB_ON   = Color3.fromRGB(99,  102, 241),
+    TAB_OFF  = Color3.fromRGB(28,  28,  40 ),
+}
 
-local function log(level, ...)
-    local tag = ({
-        INFO  = "i  INFO",
-        WARN  = "!  WARN",
-        CRIT  = "!! CRIT",
-        OK    = "OK OK",
-        EXEC  = ">> EXEC",
-    })[level] or "   "
-    print(LOG_PREFIX, tag, ...)
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 4 — RUNTIME STATE
+-- ════════════════════════════════════════════════════════════════════════════
+
+local State = {
+    scanResults        = { allRemotes = {}, suspiciousScripts = {} },
+    firewalled         = {},
+    execHistory        = {},
+    consoleEntries     = {},
+    monitorConns       = {},
+    isScanning         = false,
+    activeTab          = "Scanner",
+    minimised          = false,
+    selectedRemote     = nil,
+}
+
+-- Forward references for console (filled once GUI is built)
+local ConsoleList      = nil
+local ResultsList      = nil
+local HistList         = nil
+local FWList           = nil
+local ProgressFill     = nil
+local ProgressLabel    = nil
+local statLabels       = {}
+local tabButtons       = {}
+local tabFrames        = {}
+local TargetBox        = nil
+local PayloadBox       = nil
+local ExecResultLabel  = nil
+local currentFireMode  = "FireServer"
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 5 — LOGGING SYSTEM
+-- ════════════════════════════════════════════════════════════════════════════
+
+local function ts()
+    local t = os.date("*t")
+    return string.format("%02d:%02d:%02d", t.hour, t.min, t.sec)
 end
 
--- ─── UTILITIES ───────────────────────────────────────────────────────────────
+local LEVEL_COLOR = {
+    INFO = Color3.fromRGB( 99, 102, 241),
+    WARN = Color3.fromRGB(234, 179,   8),
+    CRIT = Color3.fromRGB(239,  68,  68),
+    OK   = Color3.fromRGB( 34, 197,  94),
+    EXEC = Color3.fromRGB(168, 170, 255),
+    SYS  = Color3.fromRGB(155, 155, 188),
+}
 
--- Case-insensitive substring check against the suspicious name list
-local function isSuspiciousName(name)
-    local lower = name:lower()
-    for _, keyword in ipairs(CONFIG.SUSPICIOUS_NAMES) do
-        if lower:find(keyword, 1, true) then
-            return true, keyword
-        end
+local function log(level, msg)
+    msg = tostring(msg)
+    local color = LEVEL_COLOR[level] or T.TXT
+    local entry = { ts = ts(), level = level, msg = msg, color = color }
+    table.insert(State.consoleEntries, entry)
+    print(string.format("[SSScanner][%s][%s] %s", entry.ts, level, msg))
+
+    if ConsoleList then
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, -8, 0, 18)
+        row.BackgroundTransparency = 1
+        row.LayoutOrder = #State.consoleEntries
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, 0, 1, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.TextColor3 = color
+        lbl.Font = Enum.Font.Code
+        lbl.TextSize = 11
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = string.format("[%s][%s] %s", entry.ts, level, msg)
+        lbl.TextTruncate = Enum.TextTruncate.AtEnd
+        lbl.Parent = row
+        row.Parent = ConsoleList
+
+        task.defer(function()
+            local sf = ConsoleList.Parent
+            if sf and sf:IsA("ScrollingFrame") then
+                sf.CanvasPosition = Vector2.new(0, math.huge)
+            end
+        end)
+    end
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 6 — GUI UTILITY HELPERS
+-- ════════════════════════════════════════════════════════════════════════════
+
+local function corner(inst, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r or 6)
+    c.Parent = inst
+    return c
+end
+
+local function stroke(inst, col, thick)
+    local s = Instance.new("UIStroke")
+    s.Color = col or T.BORDER
+    s.Thickness = thick or 1
+    s.Parent = inst
+    return s
+end
+
+local function padding(inst, top, right, bot, left)
+    local p = Instance.new("UIPadding")
+    p.PaddingTop    = UDim.new(0, top   or 6)
+    p.PaddingRight  = UDim.new(0, right or 6)
+    p.PaddingBottom = UDim.new(0, bot   or 6)
+    p.PaddingLeft   = UDim.new(0, left  or 6)
+    p.Parent = inst
+    return p
+end
+
+local function listLayout(inst, gap, dir, halign)
+    local l = Instance.new("UIListLayout")
+    l.Padding = UDim.new(0, gap or 4)
+    l.FillDirection = dir or Enum.FillDirection.Vertical
+    l.HorizontalAlignment = halign or Enum.HorizontalAlignment.Left
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Parent = inst
+    return l
+end
+
+local function label(parent, text, size, col, font, xalign)
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.Text = text or ""
+    l.TextSize = size or 13
+    l.TextColor3 = col or T.TXT
+    l.Font = font or Enum.Font.GothamBold
+    l.TextXAlignment = xalign or Enum.TextXAlignment.Left
+    l.TextTruncate = Enum.TextTruncate.AtEnd
+    l.Parent = parent
+    return l
+end
+
+local function scrollFrame(parent, size, pos)
+    local sf = Instance.new("ScrollingFrame")
+    sf.Size = size or UDim2.new(1,0,1,0)
+    if pos then sf.Position = pos end
+    sf.BackgroundTransparency = 1
+    sf.BorderSizePixel = 0
+    sf.ScrollBarThickness = 5
+    sf.ScrollBarImageColor3 = T.SCROLL
+    sf.CanvasSize = UDim2.new(0,0,0,0)
+    sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    sf.Parent = parent
+    return sf
+end
+
+local function makeBtn(parent, text, bg, fg, size, pos)
+    local b = Instance.new("TextButton")
+    b.Size = size or UDim2.new(0,100,0,30)
+    if pos then b.Position = pos end
+    b.BackgroundColor3 = bg or T.ACC
+    b.TextColor3 = fg or T.TXT
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 12
+    b.Text = text or ""
+    b.AutoButtonColor = false
+    b.BorderSizePixel = 0
+    b.Parent = parent
+    corner(b, 6)
+
+    local base = bg
+    b.MouseEnter:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1), {
+            BackgroundColor3 = Color3.new(
+                math.min(base.R+0.08,1), math.min(base.G+0.08,1), math.min(base.B+0.08,1))
+        }):Play()
+    end)
+    b.MouseLeave:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = base }):Play()
+    end)
+    b.MouseButton1Down:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.06), {
+            BackgroundColor3 = Color3.new(
+                math.max(base.R-0.08,0), math.max(base.G-0.08,0), math.max(base.B-0.08,0))
+        }):Play()
+    end)
+    b.MouseButton1Up:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = base }):Play()
+    end)
+    return b
+end
+
+local function makeToggle(parent, labelText, initial, onChange)
+    local ctr = Instance.new("Frame")
+    ctr.Size = UDim2.new(1,0,0,30)
+    ctr.BackgroundTransparency = 1
+    ctr.Parent = parent
+
+    local lbl = label(ctr, labelText, 13, T.TXT, Enum.Font.Gotham)
+    lbl.Size = UDim2.new(1,-54,1,0)
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(0,44,0,22)
+    track.Position = UDim2.new(1,-44,0.5,-11)
+    track.BackgroundColor3 = initial and T.ACC or T.BG_TER
+    track.Parent = ctr
+    corner(track, 11)
+    stroke(track, T.BORDER)
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0,16,0,16)
+    knob.Position = initial and UDim2.new(1,-19,0.5,-8) or UDim2.new(0,3,0.5,-8)
+    knob.BackgroundColor3 = T.TXT
+    knob.Parent = track
+    corner(knob, 8)
+
+    local state = initial
+    local hitbox = Instance.new("TextButton")
+    hitbox.Size = UDim2.new(1,0,1,0)
+    hitbox.BackgroundTransparency = 1
+    hitbox.Text = ""
+    hitbox.Parent = ctr
+    hitbox.MouseButton1Click:Connect(function()
+        state = not state
+        TweenService:Create(track, TweenInfo.new(0.18), {
+            BackgroundColor3 = state and T.ACC or T.BG_TER }):Play()
+        TweenService:Create(knob, TweenInfo.new(0.18), {
+            Position = state and UDim2.new(1,-19,0.5,-8) or UDim2.new(0,3,0.5,-8) }):Play()
+        if onChange then onChange(state) end
+    end)
+    return ctr
+end
+
+local function separator(parent)
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1,-12,0,1)
+    f.BackgroundColor3 = T.BORDER
+    f.BorderSizePixel = 0
+    f.Parent = parent
+    return f
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 7 — MAIN WINDOW & TITLE BAR
+-- ════════════════════════════════════════════════════════════════════════════
+
+if PlayerGui:FindFirstChild("SSBackdoorScanner") then
+    PlayerGui.SSBackdoorScanner:Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "SSBackdoorScanner"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0,750,0,510)
+MainFrame.Position = UDim2.new(0.5,-375,0.5,-255)
+MainFrame.BackgroundColor3 = T.BG_PRI
+MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
+MainFrame.Parent = ScreenGui
+corner(MainFrame, 10)
+stroke(MainFrame, T.BORDER, 1)
+
+-- Shadow
+local shadow = Instance.new("ImageLabel")
+shadow.Size = UDim2.new(1,50,1,50)
+shadow.Position = UDim2.new(0,-25,0,-25)
+shadow.BackgroundTransparency = 1
+shadow.Image = "rbxassetid://5554236805"
+shadow.ImageColor3 = Color3.new(0,0,0)
+shadow.ImageTransparency = 0.65
+shadow.ScaleType = Enum.ScaleType.Slice
+shadow.SliceCenter = Rect.new(23,23,277,277)
+shadow.ZIndex = -1
+shadow.Parent = MainFrame
+
+-- Title bar
+local TitleBar = Instance.new("Frame")
+TitleBar.Name = "TitleBar"
+TitleBar.Size = UDim2.new(1,0,0,42)
+TitleBar.BackgroundColor3 = T.TITLE
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = MainFrame
+
+-- Accent line under title
+local titleLine = Instance.new("Frame")
+titleLine.Size = UDim2.new(1,0,0,2)
+titleLine.Position = UDim2.new(0,0,1,-2)
+titleLine.BackgroundColor3 = T.ACC
+titleLine.BorderSizePixel = 0
+titleLine.Parent = TitleBar
+
+local titleIcon = label(TitleBar, "⚡", 18, T.ACC, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+titleIcon.Size = UDim2.new(0,34,1,0)
+titleIcon.Position = UDim2.new(0,8,0,0)
+
+local titleMain = label(TitleBar, "SS Backdoor Scanner  v"..CONFIG.VERSION, 14, T.TXT)
+titleMain.Size = UDim2.new(1,-160,1,0)
+titleMain.Position = UDim2.new(0,44,0,0)
+
+local titleSub = label(TitleBar, "Full GUI Edition", 10, T.TXT_MUT, Enum.Font.Gotham, Enum.TextXAlignment.Right)
+titleSub.Size = UDim2.new(0,130,1,0)
+titleSub.Position = UDim2.new(1,-200,0,0)
+
+local btnClose = makeBtn(TitleBar, "✕", T.BTN_RED, T.TXT, UDim2.new(0,30,0,26))
+btnClose.Position = UDim2.new(1,-38,0.5,-13)
+btnClose.TextSize = 12
+
+local btnMin = makeBtn(TitleBar, "─", T.BG_TER, T.TXT_SEC, UDim2.new(0,30,0,26))
+btnMin.Position = UDim2.new(1,-72,0.5,-13)
+btnMin.TextSize = 12
+
+-- Drag
+local dragging, dragStart, startPos = false, nil, nil
+TitleBar.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = i.Position; startPos = MainFrame.Position
+    end
+end)
+TitleBar.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+        local d = i.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset+d.X,
+                                        startPos.Y.Scale, startPos.Y.Offset+d.Y)
+    end
+end)
+
+btnClose.MouseButton1Click:Connect(function()
+    TweenService:Create(MainFrame, TweenInfo.new(0.22,Enum.EasingStyle.Quart), {
+        Size     = UDim2.new(0,0,0,0),
+        Position = UDim2.new(MainFrame.Position.X.Scale, MainFrame.Position.X.Offset+375,
+                             MainFrame.Position.Y.Scale, MainFrame.Position.Y.Offset+255),
+    }):Play()
+    task.delay(0.25, function() ScreenGui:Destroy() end)
+end)
+
+btnMin.MouseButton1Click:Connect(function()
+    State.minimised = not State.minimised
+    local sz = State.minimised and UDim2.new(0,750,0,42) or UDim2.new(0,750,0,510)
+    TweenService:Create(MainFrame, TweenInfo.new(0.22,Enum.EasingStyle.Quart), { Size = sz }):Play()
+end)
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 8 — TAB BAR
+-- ════════════════════════════════════════════════════════════════════════════
+
+local TabBar = Instance.new("Frame")
+TabBar.Size = UDim2.new(1,0,0,36)
+TabBar.Position = UDim2.new(0,0,0,42)
+TabBar.BackgroundColor3 = T.BG_SEC
+TabBar.BorderSizePixel = 0
+TabBar.Parent = MainFrame
+listLayout(TabBar, 3, Enum.FillDirection.Horizontal)
+padding(TabBar, 4, 8, 4, 8)
+
+local tabBottomLine = Instance.new("Frame")
+tabBottomLine.Size = UDim2.new(1,0,0,1)
+tabBottomLine.Position = UDim2.new(0,0,1,-1)
+tabBottomLine.BackgroundColor3 = T.BORDER
+tabBottomLine.BorderSizePixel = 0
+tabBottomLine.Parent = TabBar
+
+local ContentArea = Instance.new("Frame")
+ContentArea.Size = UDim2.new(1,0,1,-78)
+ContentArea.Position = UDim2.new(0,0,0,78)
+ContentArea.BackgroundTransparency = 1
+ContentArea.Parent = MainFrame
+
+local TAB_NAMES = {"Scanner","Executor","Console","Firewall","Settings"}
+local TAB_ICONS = {"🔍","▶","📋","🛡","⚙"}
+
+local function switchTab(name)
+    State.activeTab = name
+    for _, n in ipairs(TAB_NAMES) do
+        local b = tabButtons[n]; local f = tabFrames[n]
+        local on = (n == name)
+        TweenService:Create(b, TweenInfo.new(0.14), {
+            BackgroundColor3 = on and T.TAB_ON or T.TAB_OFF,
+            TextColor3       = on and T.TXT or T.TXT_MUT,
+        }):Play()
+        if f then f.Visible = on end
+    end
+end
+
+for i, name in ipairs(TAB_NAMES) do
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0,127,1,0)
+    b.BackgroundColor3 = T.TAB_OFF
+    b.TextColor3 = T.TXT_MUT
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 12
+    b.Text = TAB_ICONS[i].."  "..name
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.Parent = TabBar
+    corner(b, 5)
+    tabButtons[name] = b
+    b.MouseButton1Click:Connect(function() switchTab(name) end)
+
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1,0,1,0)
+    f.BackgroundTransparency = 1
+    f.Visible = false
+    f.Parent = ContentArea
+    tabFrames[name] = f
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 9 — SCANNER TAB  (Stats bar, buttons, progress, result list)
+-- ════════════════════════════════════════════════════════════════════════════
+
+local ST = tabFrames["Scanner"]
+
+-- Stats bar
+local statsBar = Instance.new("Frame")
+statsBar.Size = UDim2.new(1,-16,0,50)
+statsBar.Position = UDim2.new(0,8,0,8)
+statsBar.BackgroundColor3 = T.BG_SEC
+statsBar.BorderSizePixel = 0
+statsBar.Parent = ST
+corner(statsBar, 8); stroke(statsBar, T.BORDER)
+listLayout(statsBar, 0, Enum.FillDirection.Horizontal)
+
+local STAT_DEFS = {
+    { key="totalRemotes",  lbl="Remotes Found",   col=T.INFO },
+    { key="suspicious",    lbl="Suspicious",       col=T.CRIT },
+    { key="scriptFlags",   lbl="Scripts Flagged",  col=T.WARN },
+    { key="scanTime",      lbl="Scan Time",        col=T.OK   },
+}
+
+for i, def in ipairs(STAT_DEFS) do
+    local cell = Instance.new("Frame")
+    cell.Size = UDim2.new(0.25,0,1,0)
+    cell.BackgroundTransparency = 1
+    cell.Parent = statsBar
+
+    if i < 4 then
+        local div = Instance.new("Frame")
+        div.Size = UDim2.new(0,1,0.55,0)
+        div.Position = UDim2.new(1,0,0.225,0)
+        div.BackgroundColor3 = T.BORDER
+        div.BorderSizePixel = 0
+        div.Parent = cell
+    end
+
+    local val = label(cell, "0", 22, def.col, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+    val.Size = UDim2.new(1,0,0,25)
+    val.Position = UDim2.new(0,0,0,4)
+    statLabels[def.key] = val
+
+    local sub = label(cell, def.lbl, 10, T.TXT_MUT, Enum.Font.Gotham, Enum.TextXAlignment.Center)
+    sub.Size = UDim2.new(1,0,0,13)
+    sub.Position = UDim2.new(0,0,0,30)
+end
+
+local function updateStats()
+    local n = 0
+    for _, r in ipairs(State.scanResults.allRemotes) do
+        if r.isSuspicious then n += 1 end
+    end
+    statLabels["totalRemotes"].Text = tostring(#State.scanResults.allRemotes)
+    statLabels["suspicious"].Text   = tostring(n)
+    statLabels["scriptFlags"].Text  = tostring(#State.scanResults.suspiciousScripts)
+end
+
+-- Scan buttons
+local scanBtnBar = Instance.new("Frame")
+scanBtnBar.Size = UDim2.new(1,-16,0,34)
+scanBtnBar.Position = UDim2.new(0,8,0,66)
+scanBtnBar.BackgroundTransparency = 1
+scanBtnBar.Parent = ST
+listLayout(scanBtnBar, 6, Enum.FillDirection.Horizontal)
+
+local btnScan   = makeBtn(scanBtnBar, "⚡  Scan Now",        T.BTN_BLU, T.TXT, UDim2.new(0,118,1,0))
+local btnClear  = makeBtn(scanBtnBar, "🗑  Clear",            T.BG_TER,  T.TXT_SEC, UDim2.new(0,88,1,0))
+local btnFWAll  = makeBtn(scanBtnBar, "🛡  Firewall All",     T.BTN_RED, T.TXT, UDim2.new(0,125,1,0))
+local btnSelExec= makeBtn(scanBtnBar, "▶  Exec Selected",    T.BTN_GRN, T.TXT, UDim2.new(0,135,1,0))
+
+-- Progress bar
+local progressBG = Instance.new("Frame")
+progressBG.Size = UDim2.new(1,-16,0,4)
+progressBG.Position = UDim2.new(0,8,0,106)
+progressBG.BackgroundColor3 = T.BG_TER
+progressBG.BorderSizePixel = 0
+progressBG.Parent = ST
+corner(progressBG, 2)
+
+ProgressFill = Instance.new("Frame")
+ProgressFill.Size = UDim2.new(0,0,1,0)
+ProgressFill.BackgroundColor3 = T.ACC
+ProgressFill.BorderSizePixel = 0
+ProgressFill.Parent = progressBG
+corner(ProgressFill, 2)
+
+ProgressLabel = label(ST, "Ready to scan.", 11, T.TXT_MUT, Enum.Font.Gotham)
+ProgressLabel.Size = UDim2.new(1,-16,0,13)
+ProgressLabel.Position = UDim2.new(0,8,0,113)
+
+-- Column headers
+local hdr = Instance.new("Frame")
+hdr.Size = UDim2.new(1,-16,0,22)
+hdr.Position = UDim2.new(0,8,0,130)
+hdr.BackgroundColor3 = T.BG_TER
+hdr.BorderSizePixel = 0
+hdr.Parent = ST
+corner(hdr, 4)
+
+local function hcol(t, w, x)
+    local l = label(hdr, t, 10, T.TXT_MUT, Enum.Font.GothamBold)
+    l.Size = UDim2.new(0,w,1,0); l.Position = UDim2.new(0,x,0,0)
+end
+hcol("TYPE",    115,   8)
+hcol("PATH",    255, 125)
+hcol("KEYWORD", 100, 385)
+hcol("ACTIONS", 120, 492)
+
+-- Results scroll
+local resultsScroll = scrollFrame(ST, UDim2.new(1,-16,1,-162), UDim2.new(0,8,0,157))
+resultsScroll.BackgroundColor3 = T.BG_SEC
+resultsScroll.BackgroundTransparency = 0
+corner(resultsScroll, 6); stroke(resultsScroll, T.BORDER)
+padding(resultsScroll, 4,4,4,4)
+
+ResultsList = Instance.new("Frame")
+ResultsList.Size = UDim2.new(1,0,0,0)
+ResultsList.BackgroundTransparency = 1
+ResultsList.Parent = resultsScroll
+listLayout(ResultsList, 3)
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 10 — EXECUTOR TAB
+-- ════════════════════════════════════════════════════════════════════════════
+
+local ET = tabFrames["Executor"]
+
+local execLeft = Instance.new("Frame")
+execLeft.Size = UDim2.new(0.58,-6,1,-16)
+execLeft.Position = UDim2.new(0,8,0,8)
+execLeft.BackgroundTransparency = 1
+execLeft.Parent = ET
+
+local execRight = Instance.new("Frame")
+execRight.Size = UDim2.new(0.42,-10,1,-16)
+execRight.Position = UDim2.new(0.58,2,0,8)
+execRight.BackgroundTransparency = 1
+execRight.Parent = ET
+
+-- Target path
+local tgtLbl = label(execLeft, "TARGET REMOTE PATH", 10, T.TXT_MUT, Enum.Font.GothamBold)
+tgtLbl.Size = UDim2.new(1,0,0,14)
+
+TargetBox = Instance.new("TextBox")
+TargetBox.Size = UDim2.new(1,0,0,28)
+TargetBox.Position = UDim2.new(0,0,0,17)
+TargetBox.BackgroundColor3 = T.BG_TER
+TargetBox.TextColor3 = T.ACC
+TargetBox.PlaceholderText = "Select from Scanner or type full path..."
+TargetBox.PlaceholderColor3 = T.TXT_MUT
+TargetBox.Font = Enum.Font.Code
+TargetBox.TextSize = 12
+TargetBox.ClearTextOnFocus = false
+TargetBox.TextXAlignment = Enum.TextXAlignment.Left
+TargetBox.Parent = execLeft
+corner(TargetBox, 6); stroke(TargetBox, T.BORDER); padding(TargetBox, 0,8,0,8)
+
+-- Fire mode selector
+local modeLbl = label(execLeft, "FIRE MODE", 10, T.TXT_MUT, Enum.Font.GothamBold)
+modeLbl.Size = UDim2.new(1,0,0,14)
+modeLbl.Position = UDim2.new(0,0,0,52)
+
+local modeBar = Instance.new("Frame")
+modeBar.Size = UDim2.new(1,0,0,28)
+modeBar.Position = UDim2.new(0,0,0,68)
+modeBar.BackgroundTransparency = 1
+modeBar.Parent = execLeft
+listLayout(modeBar, 6, Enum.FillDirection.Horizontal)
+
+local btnFireServer = makeBtn(modeBar, "FireServer",   T.ACC,    T.TXT, UDim2.new(0,108,1,0))
+local btnInvoke     = makeBtn(modeBar, "InvokeServer", T.BG_TER, T.TXT_SEC, UDim2.new(0,115,1,0))
+
+btnFireServer.MouseButton1Click:Connect(function()
+    currentFireMode = "FireServer"
+    btnFireServer.BackgroundColor3 = T.ACC;    btnFireServer.TextColor3 = T.TXT
+    btnInvoke.BackgroundColor3     = T.BG_TER; btnInvoke.TextColor3     = T.TXT_SEC
+end)
+btnInvoke.MouseButton1Click:Connect(function()
+    currentFireMode = "InvokeServer"
+    btnInvoke.BackgroundColor3     = T.ACC;    btnInvoke.TextColor3     = T.TXT
+    btnFireServer.BackgroundColor3 = T.BG_TER; btnFireServer.TextColor3 = T.TXT_SEC
+end)
+
+-- Payload editor
+local payLbl = label(execLeft, "PAYLOAD", 10, T.TXT_MUT, Enum.Font.GothamBold)
+payLbl.Size = UDim2.new(1,0,0,14)
+payLbl.Position = UDim2.new(0,0,0,104)
+
+PayloadBox = Instance.new("TextBox")
+PayloadBox.Size = UDim2.new(1,0,0,138)
+PayloadBox.Position = UDim2.new(0,0,0,121)
+PayloadBox.BackgroundColor3 = T.BG_SEC
+PayloadBox.TextColor3 = T.TXT
+PayloadBox.PlaceholderText = "-- Enter your payload here\nprint('hello')"
+PayloadBox.PlaceholderColor3 = T.TXT_MUT
+PayloadBox.Font = Enum.Font.Code
+PayloadBox.TextSize = 12
+PayloadBox.ClearTextOnFocus = false
+PayloadBox.MultiLine = true
+PayloadBox.TextXAlignment = Enum.TextXAlignment.Left
+PayloadBox.TextYAlignment = Enum.TextYAlignment.Top
+PayloadBox.Parent = execLeft
+corner(PayloadBox, 6); stroke(PayloadBox, T.BORDER); padding(PayloadBox, 8,8,8,8)
+
+-- Execute buttons
+local execBtns = Instance.new("Frame")
+execBtns.Size = UDim2.new(1,0,0,30)
+execBtns.Position = UDim2.new(0,0,0,265)
+execBtns.BackgroundTransparency = 1
+execBtns.Parent = execLeft
+listLayout(execBtns, 6, Enum.FillDirection.Horizontal)
+
+local btnExecute  = makeBtn(execBtns, "▶  Execute",  T.BTN_GRN, T.TXT, UDim2.new(0,108,1,0))
+local btnTestFire = makeBtn(execBtns, "🔔 Test Fire", T.BTN_BLU, T.TXT, UDim2.new(0,108,1,0))
+local btnClearPay = makeBtn(execBtns, "🗑 Clear",     T.BG_TER,  T.TXT_SEC, UDim2.new(0,78,1,0))
+
+ExecResultLabel = label(execLeft, "Last result: —", 11, T.TXT_MUT, Enum.Font.Code)
+ExecResultLabel.Size = UDim2.new(1,0,0,13)
+ExecResultLabel.Position = UDim2.new(0,0,0,302)
+
+-- Execution history
+local histLbl = label(execLeft, "EXECUTION HISTORY", 10, T.TXT_MUT, Enum.Font.GothamBold)
+histLbl.Size = UDim2.new(1,0,0,14)
+histLbl.Position = UDim2.new(0,0,0,322)
+
+local histScroll = scrollFrame(execLeft, UDim2.new(1,0,0,70), UDim2.new(0,0,0,339))
+histScroll.BackgroundColor3 = T.BG_SEC
+histScroll.BackgroundTransparency = 0
+corner(histScroll, 6); stroke(histScroll, T.BORDER)
+
+HistList = Instance.new("Frame")
+HistList.Size = UDim2.new(1,0,0,0)
+HistList.BackgroundTransparency = 1
+HistList.Parent = histScroll
+listLayout(HistList, 2)
+padding(HistList, 4,4,4,4)
+
+-- Payload library (right panel)
+local libLbl = label(execRight, "PAYLOAD LIBRARY", 10, T.TXT_MUT, Enum.Font.GothamBold)
+libLbl.Size = UDim2.new(1,0,0,14)
+
+local libScroll = scrollFrame(execRight, UDim2.new(1,0,1,-22), UDim2.new(0,0,0,18))
+libScroll.BackgroundColor3 = T.BG_SEC
+libScroll.BackgroundTransparency = 0
+corner(libScroll, 6); stroke(libScroll, T.BORDER)
+
+local LibList = Instance.new("Frame")
+LibList.Size = UDim2.new(1,0,0,0)
+LibList.BackgroundTransparency = 1
+LibList.Parent = libScroll
+listLayout(LibList, 3)
+padding(LibList, 4,4,4,4)
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 11 — CONSOLE TAB
+-- ════════════════════════════════════════════════════════════════════════════
+
+local CON = tabFrames["Console"]
+
+local conBtnBar = Instance.new("Frame")
+conBtnBar.Size = UDim2.new(1,-16,0,28)
+conBtnBar.Position = UDim2.new(0,8,0,8)
+conBtnBar.BackgroundTransparency = 1
+conBtnBar.Parent = CON
+listLayout(conBtnBar, 6, Enum.FillDirection.Horizontal)
+
+local btnClearCon = makeBtn(conBtnBar, "🗑  Clear Console",  T.BG_TER,  T.TXT_SEC, UDim2.new(0,132,1,0))
+local fltrSep     = label(conBtnBar, "Filter:", 11, T.TXT_MUT, Enum.Font.Gotham)
+fltrSep.Size = UDim2.new(0,42,1,0)
+local fltrAll  = makeBtn(conBtnBar, "ALL",  T.ACC,    T.TXT,   UDim2.new(0,46,1,0))
+local fltrCrit = makeBtn(conBtnBar, "CRIT", T.BG_TER, T.CRIT,  UDim2.new(0,46,1,0))
+local fltrWarn = makeBtn(conBtnBar, "WARN", T.BG_TER, T.WARN,  UDim2.new(0,46,1,0))
+local fltrOK   = makeBtn(conBtnBar, "OK",   T.BG_TER, T.OK,    UDim2.new(0,46,1,0))
+
+local conScroll = scrollFrame(CON, UDim2.new(1,-16,1,-50), UDim2.new(0,8,0,42))
+conScroll.BackgroundColor3 = T.BG_SEC
+conScroll.BackgroundTransparency = 0
+corner(conScroll, 6); stroke(conScroll, T.BORDER); padding(conScroll, 4,4,4,4)
+
+ConsoleList = Instance.new("Frame")
+ConsoleList.Size = UDim2.new(1,0,0,0)
+ConsoleList.BackgroundTransparency = 1
+ConsoleList.Parent = conScroll
+listLayout(ConsoleList, 1)
+
+btnClearCon.MouseButton1Click:Connect(function()
+    ConsoleList:ClearAllChildren()
+    listLayout(ConsoleList, 1)
+    State.consoleEntries = {}
+    log("SYS", "Console cleared.")
+end)
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 12 — FIREWALL TAB
+-- ════════════════════════════════════════════════════════════════════════════
+
+local FWT = tabFrames["Firewall"]
+
+local fwTopBar = Instance.new("Frame")
+fwTopBar.Size = UDim2.new(1,-16,0,38)
+fwTopBar.Position = UDim2.new(0,8,0,8)
+fwTopBar.BackgroundColor3 = T.BG_SEC
+fwTopBar.BorderSizePixel = 0
+fwTopBar.Parent = FWT
+corner(fwTopBar, 8); stroke(fwTopBar, T.BORDER); padding(fwTopBar, 0,12,0,12)
+
+local fwModeLbl = label(fwTopBar, "AUTO FIREWALL MODE  —  neutralise suspicious remotes on scan", 12, T.TXT_MUT, Enum.Font.Gotham)
+fwModeLbl.Size = UDim2.new(1,-56,1,0)
+
+makeToggle(fwTopBar, "", CONFIG.FIREWALL_MODE, function(v)
+    CONFIG.FIREWALL_MODE = v
+    log("SYS", "Firewall mode "..(v and "ENABLED" or "DISABLED"))
+end).Size = UDim2.new(0,50,1,0)
+
+local monBar = Instance.new("Frame")
+monBar.Size = UDim2.new(1,-16,0,38)
+monBar.Position = UDim2.new(0,8,0,54)
+monBar.BackgroundColor3 = T.BG_SEC
+monBar.BorderSizePixel = 0
+monBar.Parent = FWT
+corner(monBar, 8); stroke(monBar, T.BORDER); padding(monBar, 0,12,0,12)
+
+local monLbl = label(monBar, "LIVE MONITOR  —  watch DescendantAdded on all services", 12, T.TXT_MUT, Enum.Font.Gotham)
+monLbl.Size = UDim2.new(1,-56,1,0)
+
+makeToggle(monBar, "", CONFIG.LIVE_MONITOR, function(v)
+    CONFIG.LIVE_MONITOR = v
+    log("SYS", "Live monitor "..(v and "ENABLED" or "DISABLED"))
+end).Size = UDim2.new(0,50,1,0)
+
+local fwBtnBar = Instance.new("Frame")
+fwBtnBar.Size = UDim2.new(1,-16,0,30)
+fwBtnBar.Position = UDim2.new(0,8,0,100)
+fwBtnBar.BackgroundTransparency = 1
+fwBtnBar.Parent = FWT
+listLayout(fwBtnBar, 6, Enum.FillDirection.Horizontal)
+
+local btnFWAllSusp  = makeBtn(fwBtnBar, "🛡  Firewall All Suspicious", T.BTN_RED,  T.TXT, UDim2.new(0,200,1,0))
+local btnFWRestore  = makeBtn(fwBtnBar, "↩  Restore All",              T.BTN_ORA,  T.TXT, UDim2.new(0,130,1,0))
+local btnFWClearLog = makeBtn(fwBtnBar, "🗑  Clear Log",               T.BG_TER, T.TXT_SEC, UDim2.new(0,100,1,0))
+
+-- FW list header
+local fwHdr = Instance.new("Frame")
+fwHdr.Size = UDim2.new(1,-16,0,22)
+fwHdr.Position = UDim2.new(0,8,0,138)
+fwHdr.BackgroundColor3 = T.BG_TER
+fwHdr.BorderSizePixel = 0
+fwHdr.Parent = FWT
+corner(fwHdr, 4)
+
+local function fwH(t, w, x)
+    local l = label(fwHdr, t, 10, T.TXT_MUT, Enum.Font.GothamBold)
+    l.Size = UDim2.new(0,w,1,0); l.Position = UDim2.new(0,x,0,0)
+end
+fwH("CLASS",         115,   8)
+fwH("PATH",          355, 126)
+fwH("FIREWALLED AT",  90, 490)
+
+local fwScroll = scrollFrame(FWT, UDim2.new(1,-16,1,-170), UDim2.new(0,8,0,165))
+fwScroll.BackgroundColor3 = T.BG_SEC
+fwScroll.BackgroundTransparency = 0
+corner(fwScroll, 6); stroke(fwScroll, T.BORDER); padding(fwScroll, 4,4,4,4)
+
+FWList = Instance.new("Frame")
+FWList.Size = UDim2.new(1,0,0,0)
+FWList.BackgroundTransparency = 1
+FWList.Parent = fwScroll
+listLayout(FWList, 3)
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 13 — SETTINGS TAB
+-- ════════════════════════════════════════════════════════════════════════════
+
+local SET = tabFrames["Settings"]
+
+local setScroll = scrollFrame(SET, UDim2.new(1,-16,1,-16), UDim2.new(0,8,0,8))
+setScroll.BackgroundTransparency = 1
+
+local setList = Instance.new("Frame")
+setList.Size = UDim2.new(1,0,0,0)
+setList.BackgroundTransparency = 1
+setList.Parent = setScroll
+listLayout(setList, 8)
+padding(setList, 4,4,4,4)
+
+local function setSection(t)
+    local l = label(setList, t, 10, T.TXT_MUT, Enum.Font.GothamBold)
+    l.Size = UDim2.new(1,0,0,16)
+    separator(setList)
+end
+
+local function setGroup(builder)
+    local box = Instance.new("Frame")
+    box.Size = UDim2.new(1,0,0,0)
+    box.AutomaticSize = Enum.AutomaticSize.Y
+    box.BackgroundColor3 = T.BG_SEC
+    box.BorderSizePixel = 0
+    box.Parent = setList
+    corner(box, 8); stroke(box, T.BORDER); padding(box, 8,12,8,12); listLayout(box, 8)
+    builder(box)
+end
+
+setSection("SCAN SETTINGS")
+setGroup(function(p)
+    makeToggle(p, "Verbose Mode — show all found remotes, not just suspicious", CONFIG.VERBOSE, function(v) CONFIG.VERBOSE = v end)
+    makeToggle(p, "Scan Script Sources — check for loadstring/getgenv/etc", CONFIG.SCAN_SCRIPTS, function(v) CONFIG.SCAN_SCRIPTS = v end)
+    makeToggle(p, "Live Monitor — watch DescendantAdded on all services", CONFIG.LIVE_MONITOR, function(v) CONFIG.LIVE_MONITOR = v end)
+    makeToggle(p, "Firewall Mode — auto-firewall suspicious remotes on scan", CONFIG.FIREWALL_MODE, function(v) CONFIG.FIREWALL_MODE = v end)
+end)
+
+setSection("EXECUTOR SETTINGS")
+setGroup(function(p)
+    local function numRow(lbl, key, min_, max_)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1,0,0,28)
+        row.BackgroundTransparency = 1
+        row.Parent = p
+        local l = label(row, lbl, 13, T.TXT, Enum.Font.Gotham)
+        l.Size = UDim2.new(1,-72,1,0)
+        local tb = Instance.new("TextBox")
+        tb.Size = UDim2.new(0,62,0,24)
+        tb.Position = UDim2.new(1,-62,0.5,-12)
+        tb.BackgroundColor3 = T.BG_TER
+        tb.TextColor3 = T.ACC
+        tb.Font = Enum.Font.Code
+        tb.TextSize = 13
+        tb.Text = tostring(CONFIG[key])
+        tb.Parent = row
+        corner(tb, 4); stroke(tb, T.BORDER)
+        tb.FocusLost:Connect(function()
+            local n = tonumber(tb.Text)
+            if n and n >= min_ and n <= max_ then
+                CONFIG[key] = n
+                log("SYS", key.." set to "..n)
+            else
+                tb.Text = tostring(CONFIG[key])
+            end
+        end)
+    end
+    numRow("InvokeServer Timeout (seconds)", "INVOKE_TIMEOUT", 1, 60)
+    numRow("Max Execution History Entries",  "MAX_EXEC_HISTORY", 1, 100)
+end)
+
+setSection("SUSPICIOUS KEYWORDS  (comma-separated, case-insensitive)")
+setGroup(function(p)
+    local note = label(p, "Remote names containing any of these keywords will be flagged:", 12, T.TXT_MUT, Enum.Font.Gotham)
+    note.Size = UDim2.new(1,0,0,16)
+
+    local kwTB = Instance.new("TextBox")
+    kwTB.Size = UDim2.new(1,0,0,72)
+    kwTB.BackgroundColor3 = T.BG_TER
+    kwTB.TextColor3 = T.TXT
+    kwTB.Font = Enum.Font.Code
+    kwTB.TextSize = 11
+    kwTB.MultiLine = true
+    kwTB.ClearTextOnFocus = false
+    kwTB.TextXAlignment = Enum.TextXAlignment.Left
+    kwTB.TextYAlignment = Enum.TextYAlignment.Top
+    kwTB.Text = table.concat(CONFIG.SUSPICIOUS_NAMES, ", ")
+    kwTB.Parent = p
+    corner(kwTB, 4); stroke(kwTB, T.BORDER); padding(kwTB, 4,4,4,4)
+    kwTB.FocusLost:Connect(function()
+        local words = {}
+        for w in kwTB.Text:gmatch("[^,%s]+") do table.insert(words, w:lower()) end
+        CONFIG.SUSPICIOUS_NAMES = words
+        log("SYS", "Keywords updated: "..#words.." entries")
+    end)
+end)
+
+local btnReset = makeBtn(setList, "↺  Reset All Settings to Defaults", T.BTN_ORA, T.TXT, UDim2.new(1,0,0,34))
+btnReset.MouseButton1Click:Connect(function()
+    CONFIG.VERBOSE = true; CONFIG.SCAN_SCRIPTS = true
+    CONFIG.LIVE_MONITOR = true; CONFIG.FIREWALL_MODE = false
+    CONFIG.INVOKE_TIMEOUT = 5; CONFIG.MAX_EXEC_HISTORY = 10
+    log("SYS", "Settings reset to defaults.")
+end)
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 14 — SCANNER LOGIC
+-- ════════════════════════════════════════════════════════════════════════════
+
+local function isSuspicious(name)
+    local low = name:lower()
+    for _, kw in ipairs(CONFIG.SUSPICIOUS_NAMES) do
+        if low:find(kw, 1, true) then return true, kw end
     end
     return false, nil
 end
 
--- Recursively collect all descendants of a given instance
-local function getDescendantsRecursive(root, results)
-    results = results or {}
-    local ok, children = pcall(function() return root:GetChildren() end)
-    if not ok then return results end
-    for _, child in ipairs(children) do
-        table.insert(results, child)
-        getDescendantsRecursive(child, results)
-    end
-    return results
+local function getDescendants(root, out)
+    out = out or {}
+    local ok, ch = pcall(function() return root:GetChildren() end)
+    if not ok then return out end
+    for _, c in ipairs(ch) do table.insert(out, c); getDescendants(c, out) end
+    return out
 end
 
--- Attempt to read a script's Source to check for loadstring/require abuse
-local function scanScriptSource(script)
+local function scanSource(inst)
     local flags = {}
-    local ok, source = pcall(function() return script.Source end)
-    if not ok or type(source) ~= "string" then return flags end
-
-    local patterns = {
-        { pattern = "loadstring%s*%(", label = "loadstring()" },
-        { pattern = "require%s*%(",    label = "require()" },
-        { pattern = "getfenv%s*%(",    label = "getfenv()" },
-        { pattern = "setfenv%s*%(",    label = "setfenv()" },
-        { pattern = "HttpService",     label = "HttpService" },
-        { pattern = "game%.HttpGet",   label = "game:HttpGet" },
-    }
-
-    for _, entry in ipairs(patterns) do
-        if source:find(entry.pattern) then
-            table.insert(flags, entry.label)
-        end
+    local ok, src = pcall(function() return inst.Source end)
+    if not ok or type(src) ~= "string" or #src == 0 then return flags end
+    for _, p in ipairs(CONFIG.DANGEROUS_PATTERNS) do
+        if src:find(p.pattern) then table.insert(flags, p) end
     end
     return flags
 end
 
--- ─── SCANNER ─────────────────────────────────────────────────────────────────
+local function addResultRow(entry)
+    local isSusp = entry.isSuspicious
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1,-8,0,28)
+    row.BackgroundColor3 = isSusp and Color3.fromRGB(36,16,16) or T.BG_TER
+    row.BorderSizePixel = 0
+    row.Parent = ResultsList
+    corner(row, 4)
+    if isSusp then stroke(row, Color3.fromRGB(110,25,25), 1) end
 
-local ScanResults = {
-    allRemotes        = {},  -- { instance, service, isSuspicious, keyword }
-    suspiciousScripts = {},
+    local ind = Instance.new("Frame")
+    ind.Size = UDim2.new(0,3,0.65,0)
+    ind.Position = UDim2.new(0,0,0.175,0)
+    ind.BackgroundColor3 = isSusp and T.CRIT or T.OK
+    ind.BorderSizePixel = 0
+    ind.Parent = row
+    corner(ind, 2)
+
+    local function rl(t, w, x, col, fnt)
+        local l = label(row, t, 11, col or T.TXT_SEC, fnt or Enum.Font.Code)
+        l.Size = UDim2.new(0,w,1,0); l.Position = UDim2.new(0,x,0,0)
+    end
+    rl("["..entry.class.."]", 115, 8, isSusp and T.CRIT or T.TXT_SEC)
+    rl(entry.path, 255, 126, T.TXT)
+    rl(entry.keyword or "—", 100, 386, isSusp and T.WARN or T.TXT_MUT)
+
+    local function rowBtn(t, bg, x, cb)
+        local b = makeBtn(row, t, bg, T.TXT, UDim2.new(0,26,0,20))
+        b.Position = UDim2.new(0,x,0.5,-10); b.TextSize = 10; b.MouseButton1Click:Connect(cb)
+        return b
+    end
+
+    rowBtn("🛡", T.BTN_RED, 491, function()
+        if entry.instance and entry.instance.Parent then firewallRemote(entry) end
+    end)
+    rowBtn("▶", T.BTN_GRN, 521, function()
+        State.selectedRemote = entry.instance
+        TargetBox.Text = entry.path
+        switchTab("Executor")
+        log("INFO", "Selected: "..entry.path)
+    end)
+    rowBtn("📋", T.BG_HOV, 551, function()
+        pcall(setclipboard, entry.path)
+        log("OK", "Copied: "..entry.path)
+    end)
+end
+
+local function addScriptRow(entry)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1,-8,0,26)
+    row.BackgroundColor3 = Color3.fromRGB(32,26,8)
+    row.BorderSizePixel = 0
+    row.Parent = ResultsList
+    corner(row, 4); stroke(row, Color3.fromRGB(90,70,10), 1)
+
+    local ind = Instance.new("Frame")
+    ind.Size = UDim2.new(0,3,0.65,0); ind.Position = UDim2.new(0,0,0.175,0)
+    ind.BackgroundColor3 = T.WARN; ind.BorderSizePixel = 0; ind.Parent = row; corner(ind, 2)
+
+    local cl = label(row, "[Script]", 11, T.WARN, Enum.Font.Code); cl.Size = UDim2.new(0,115,1,0); cl.Position = UDim2.new(0,8,0,0)
+    local pt = label(row, entry.path, 11, T.TXT, Enum.Font.Code);  pt.Size = UDim2.new(0,255,1,0); pt.Position = UDim2.new(0,126,0,0)
+    local fl = {}; for _, f in ipairs(entry.flags) do table.insert(fl, f.label) end
+    local fs = label(row, table.concat(fl," | "), 10, T.WARN, Enum.Font.Code); fs.Size = UDim2.new(0,250,1,0); fs.Position = UDim2.new(0,386,0,0)
+end
+
+local function runScan()
+    if State.isScanning then return end
+    State.isScanning = true
+    State.scanResults = { allRemotes = {}, suspiciousScripts = {} }
+    ResultsList:ClearAllChildren(); listLayout(ResultsList, 3)
+    btnScan.Text = "⏳ Scanning..."; btnScan.BackgroundColor3 = T.ACC_DIM
+
+    local t0 = os.clock()
+    log("INFO", "Scan started — "..#CONFIG.SCAN_SERVICES.." services")
+
+    for idx, svcName in ipairs(CONFIG.SCAN_SERVICES) do
+        task.wait()
+        local ok, svc = pcall(function() return game:GetService(svcName) end)
+        if not ok then log("WARN", "Cannot access: "..svcName) else
+            local prog = idx / #CONFIG.SCAN_SERVICES
+            TweenService:Create(ProgressFill, TweenInfo.new(0.18), { Size = UDim2.new(prog,0,1,0) }):Play()
+            ProgressLabel.Text = "Scanning "..svcName.."..."
+
+            for _, inst in ipairs(getDescendants(svc)) do
+                if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
+                    local susp, kw = isSuspicious(inst.Name)
+                    local entry = {
+                        instance=inst, service=svcName, path=inst:GetFullName(),
+                        class=inst.ClassName, isSuspicious=susp, keyword=kw
+                    }
+                    table.insert(State.scanResults.allRemotes, entry)
+                    if susp then
+                        log("CRIT", string.format("SUSPICIOUS %s '%s' (kw:'%s') @ %s",
+                            inst.ClassName, inst.Name, kw, inst:GetFullName()))
+                        addResultRow(entry)
+                        if CONFIG.FIREWALL_MODE then firewallRemote(entry) end
+                    elseif CONFIG.VERBOSE then
+                        addResultRow(entry)
+                    end
+                end
+
+                if CONFIG.SCAN_SCRIPTS and (inst:IsA("Script") or inst:IsA("LocalScript") or inst:IsA("ModuleScript")) then
+                    local flags = scanSource(inst)
+                    if #flags > 0 then
+                        local e = { instance=inst, path=inst:GetFullName(), flags=flags }
+                        table.insert(State.scanResults.suspiciousScripts, e)
+                        log("WARN", "Flagged script: "..inst:GetFullName())
+                        addScriptRow(e)
+                    end
+                end
+            end
+        end
+    end
+
+    local elapsed = os.clock() - t0
+    statLabels["scanTime"].Text = string.format("%.2fs", elapsed)
+    updateStats()
+    ProgressLabel.Text = string.format("Done — %.2fs  |  %d remotes", elapsed, #State.scanResults.allRemotes)
+    TweenService:Create(ProgressFill, TweenInfo.new(0.25), { Size = UDim2.new(1,0,1,0) }):Play()
+    task.delay(1.8, function()
+        TweenService:Create(ProgressFill, TweenInfo.new(0.4), { Size = UDim2.new(0,0,1,0) }):Play()
+    end)
+
+    local nSusp = 0
+    for _, r in ipairs(State.scanResults.allRemotes) do if r.isSuspicious then nSusp+=1 end end
+    log("OK", string.format("Scan complete: %d remotes, %d suspicious, %d flagged scripts (%.2fs)",
+        #State.scanResults.allRemotes, nSusp, #State.scanResults.suspiciousScripts, elapsed))
+
+    btnScan.Text = "⚡  Scan Now"; btnScan.BackgroundColor3 = T.BTN_BLU
+    State.isScanning = false
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 15 — FIREWALL LOGIC
+-- ════════════════════════════════════════════════════════════════════════════
+
+function firewallRemote(entry)
+    local rem = entry.instance
+    if not rem or not rem.Parent then
+        log("WARN", "Firewall skip — already gone: "..(entry.path or "?"))
+        return
+    end
+    local ok, err = pcall(function()
+        if rem:IsA("RemoteEvent")    then rem.OnServerEvent:Connect(function() end)
+        elseif rem:IsA("RemoteFunction") then rem.OnServerInvoke = function() return nil end end
+        rem.Parent = nil
+    end)
+    if ok then
+        local fw = { path=entry.path, class=entry.class, time=ts() }
+        table.insert(State.firewalled, fw)
+        log("OK", "Firewalled: "..entry.path)
+
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1,-8,0,24); row.BackgroundColor3 = Color3.fromRGB(14,26,14)
+        row.BorderSizePixel = 0; row.Parent = FWList; corner(row, 4)
+
+        local c = label(row,"["..fw.class.."]",11,T.OK,Enum.Font.Code); c.Size=UDim2.new(0,115,1,0); c.Position=UDim2.new(0,6,0,0)
+        local p = label(row, fw.path, 11, T.TXT, Enum.Font.Code);       p.Size=UDim2.new(0,355,1,0); p.Position=UDim2.new(0,124,0,0)
+        local t_ = label(row, fw.time, 11, T.TXT_MUT, Enum.Font.Code);  t_.Size=UDim2.new(0,80,1,0);  t_.Position=UDim2.new(0,490,0,0)
+    else
+        log("WARN", "Firewall failed for "..entry.path..": "..tostring(err))
+    end
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 16 — EXECUTOR LOGIC
+-- ════════════════════════════════════════════════════════════════════════════
+
+local function pushHistory(remoteName, payload, success, result)
+    local e = { ts=ts(), name=remoteName, payload=payload, success=success, result=tostring(result) }
+    table.insert(State.execHistory, 1, e)
+    while #State.execHistory > CONFIG.MAX_EXEC_HISTORY do table.remove(State.execHistory) end
+
+    HistList:ClearAllChildren(); listLayout(HistList, 2); padding(HistList, 4,4,4,4)
+    for _, h in ipairs(State.execHistory) do
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1,-8,0,16); row.BackgroundColor3 = h.success and Color3.fromRGB(12,24,12) or Color3.fromRGB(24,12,12)
+        row.BorderSizePixel = 0; row.Parent = HistList; corner(row, 3)
+        local l = label(row, string.format("[%s] %s → %s", h.ts, h.name, h.success and "OK" or "FAIL"),
+            10, h.success and T.OK or T.CRIT, Enum.Font.Code)
+        l.Size = UDim2.new(1,-8,1,0); l.Position = UDim2.new(0,4,0,0)
+    end
+end
+
+local function executePayload()
+    local remote = State.selectedRemote
+    local payload = PayloadBox.Text
+
+    if payload == "" then log("WARN","Payload is empty."); return end
+
+    if not remote or not remote.Parent then
+        local path = TargetBox.Text
+        if path == "" then log("WARN","No target remote selected."); return end
+        local parts = path:split(".")
+        local ok, svc = pcall(function() return game:GetService(parts[1]) end)
+        if ok then
+            local cur = svc
+            for i = 2, #parts do
+                cur = cur:FindFirstChild(parts[i])
+                if not cur then break end
+            end
+            remote = cur
+        end
+        if not remote then log("WARN","Cannot resolve path: "..path); return end
+    end
+
+    log("EXEC", string.format("Firing [%s] via %s on '%s'", currentFireMode, remote.ClassName, remote.Name))
+
+    if currentFireMode == "FireServer" and remote:IsA("RemoteEvent") then
+        local ok, err = pcall(function() remote:FireServer(payload) end)
+        local res = ok and "OK" or ("ERROR: "..tostring(err))
+        ExecResultLabel.Text = "Last result: "..res
+        ExecResultLabel.TextColor3 = ok and T.OK or T.CRIT
+        log(ok and "OK" or "WARN", "FireServer: "..res)
+        pushHistory(remote.Name, payload, ok, res)
+
+    elseif currentFireMode == "InvokeServer" and remote:IsA("RemoteFunction") then
+        local ok, result = pcall(function() return remote:InvokeServer(payload) end)
+        local res = ok and tostring(result) or ("ERROR: "..tostring(result))
+        ExecResultLabel.Text = "Last result: "..res
+        ExecResultLabel.TextColor3 = ok and T.OK or T.CRIT
+        log(ok and "OK" or "WARN", "InvokeServer: "..res)
+        pushHistory(remote.Name, payload, ok, res)
+    else
+        local msg = "Mode/class mismatch: "..currentFireMode.." vs "..remote.ClassName
+        log("WARN", msg); ExecResultLabel.Text = "Last result: ERROR — "..msg
+        ExecResultLabel.TextColor3 = T.CRIT
+    end
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 17 — PAYLOAD LIBRARY
+-- ════════════════════════════════════════════════════════════════════════════
+
+local PAYLOADS = {
+    { name="🔔 Print Test",              code='print("SS Scanner payload — "..tostring(os.clock()))' },
+    { name="👤 LocalPlayer Name",        code='print(game.Players.LocalPlayer.Name)' },
+    { name="📊 Instance Count",          code='print("Total instances: "..#game:GetDescendants())' },
+    { name="🌐 PlaceId",                 code='print("PlaceId: "..game.PlaceId)' },
+    { name="⏱ Server Uptime",            code='print("Uptime: "..workspace.DistributedGameTime.."s")' },
+    { name="🔑 HTTP Enabled Check",      code='print(pcall(function() return game:GetService("HttpService").HttpEnabled end))' },
+    { name="📋 List All Players",        code='for _,p in ipairs(game.Players:GetPlayers()) do print(p.Name, p.UserId) end' },
+    { name="🗺 Workspace Children",      code='for _,c in ipairs(workspace:GetChildren()) do print(c.ClassName, c.Name) end' },
+    { name="🔍 Find All Scripts",        code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("Script") then print(v:GetFullName()) end end' },
+    { name="🚨 Kick Self (test)",        code='game.Players.LocalPlayer:Kick("SS Scanner — test kick")' },
+    { name="🛡 List All RemoteEvents",   code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("RemoteEvent") then print(v:GetFullName()) end end' },
+    { name="⚙ ServerScriptService Kids",code='for _,c in ipairs(game:GetService("ServerScriptService"):GetChildren()) do print(c.ClassName, c.Name) end' },
 }
 
-local function scanService(service)
-    local all = getDescendantsRecursive(service)
+for _, pl in ipairs(PAYLOADS) do
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1,-8,0,28); b.BackgroundColor3 = T.BG_TER
+    b.TextColor3 = T.TXT; b.Font = Enum.Font.Gotham; b.TextSize = 12
+    b.Text = pl.name; b.TextXAlignment = Enum.TextXAlignment.Left
+    b.AutoButtonColor = false; b.BorderSizePixel = 0; b.Parent = LibList
+    corner(b, 4); padding(b, 0,0,0,10)
+    b.MouseEnter:Connect(function() TweenService:Create(b,TweenInfo.new(0.1),{BackgroundColor3=T.BG_HOV}):Play() end)
+    b.MouseLeave:Connect(function() TweenService:Create(b,TweenInfo.new(0.1),{BackgroundColor3=T.BG_TER}):Play() end)
+    b.MouseButton1Click:Connect(function()
+        PayloadBox.Text = pl.code
+        log("INFO","Loaded payload: "..pl.name)
+    end)
+end
 
-    for _, inst in ipairs(all) do
-        -- ── Remote detection ──────────────────────────────────────────────
-        if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
-            local suspicious, keyword = isSuspiciousName(inst.Name)
-            local entry = {
-                instance     = inst,
-                service      = service.Name,
-                path         = inst:GetFullName(),
-                class        = inst.ClassName,
-                isSuspicious = suspicious,
-                keyword      = keyword,
-            }
-            table.insert(ScanResults.allRemotes, entry)
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 18 — LIVE REMOTE MONITOR
+-- ════════════════════════════════════════════════════════════════════════════
 
-            if suspicious then
-                log("CRIT", string.format(
-                    "Suspicious %s: '%s' (matched: '%s') @ %s",
-                    inst.ClassName, inst.Name, keyword, inst:GetFullName()
-                ))
-            elseif CONFIG.VERBOSE then
-                log("INFO", string.format(
-                    "Found %s: '%s' @ %s",
-                    inst.ClassName, inst.Name, inst:GetFullName()
-                ))
-            end
-        end
+local function startMonitor()
+    for _, c in ipairs(State.monitorConns) do pcall(function() c:Disconnect() end) end
+    State.monitorConns = {}
+    if not CONFIG.LIVE_MONITOR then return end
+    log("SYS","Live monitor started — watching "..#CONFIG.SCAN_SERVICES.." services")
 
-        -- ── Script source scanning ────────────────────────────────────────
-        if CONFIG.SCAN_SCRIPTS and (
-            inst:IsA("Script") or
-            inst:IsA("LocalScript") or
-            inst:IsA("ModuleScript")
-        ) then
-            local flags = scanScriptSource(inst)
-            if #flags > 0 then
-                local entry = {
-                    instance = inst,
-                    path     = inst:GetFullName(),
-                    flags    = flags,
-                }
-                table.insert(ScanResults.suspiciousScripts, entry)
-                log("WARN", string.format(
-                    "Suspicious script '%s' @ %s -- uses: %s",
-                    inst.Name, inst:GetFullName(), table.concat(flags, ", ")
-                ))
-            end
+    for _, svcName in ipairs(CONFIG.SCAN_SERVICES) do
+        local ok, svc = pcall(function() return game:GetService(svcName) end)
+        if ok and svc then
+            local c = svc.DescendantAdded:Connect(function(inst)
+                if not CONFIG.LIVE_MONITOR then return end
+                if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
+                    local susp, kw = isSuspicious(inst.Name)
+                    if susp then
+                        log("CRIT", string.format("[MONITOR] NEW suspicious %s: '%s' (kw:'%s') @ %s",
+                            inst.ClassName, inst.Name, kw, inst:GetFullName()))
+                        local entry = {
+                            instance=inst, service=svcName, path=inst:GetFullName(),
+                            class=inst.ClassName, isSuspicious=true, keyword=kw
+                        }
+                        table.insert(State.scanResults.allRemotes, entry)
+                        addResultRow(entry); updateStats()
+                        switchTab("Scanner")
+                    elseif CONFIG.VERBOSE then
+                        log("INFO", string.format("[MONITOR] New %s: '%s' @ %s",
+                            inst.ClassName, inst.Name, inst:GetFullName()))
+                    end
+                end
+            end)
+            table.insert(State.monitorConns, c)
         end
     end
 end
 
--- ─── EXECUTOR ────────────────────────────────────────────────────────────────
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 19 — BUTTON WIRING
+-- ════════════════════════════════════════════════════════════════════════════
 
---[[
-    Safely fire a RemoteEvent or invoke a RemoteFunction with a payload.
-    Uses pcall for error isolation.
+btnScan.MouseButton1Click:Connect(function() task.spawn(runScan) end)
 
-    @param remote   Instance   The RemoteEvent or RemoteFunction to use
-    @param payload  string     Lua code string to send as the payload
-    @param timeout  number?    Timeout in seconds for RemoteFunction (default 5)
---]]
-local function executeViaRemote(remote, payload, timeout)
-    timeout = timeout or 5
-    log("EXEC", string.format("Attempting execution via '%s' (%s)", remote.Name, remote.ClassName))
+btnClear.MouseButton1Click:Connect(function()
+    State.scanResults = { allRemotes={}, suspiciousScripts={} }
+    ResultsList:ClearAllChildren(); listLayout(ResultsList, 3)
+    updateStats(); statLabels["scanTime"].Text = "0"
+    ProgressLabel.Text = "Ready to scan."
+    log("SYS","Results cleared.")
+end)
 
-    if remote:IsA("RemoteEvent") then
-        local ok, err = pcall(function()
-            remote:FireServer(payload)
-        end)
-        if ok then
-            log("OK", "FireServer succeeded.")
-        else
-            log("WARN", "FireServer failed: " .. tostring(err))
-        end
-
-    elseif remote:IsA("RemoteFunction") then
-        local ok, result = pcall(function()
-            return remote:InvokeServer(payload)
-        end)
-        if ok then
-            log("OK", "InvokeServer succeeded. Result: " .. tostring(result))
-        else
-            log("WARN", "InvokeServer failed: " .. tostring(result))
-        end
+btnFWAll.MouseButton1Click:Connect(function()
+    local n = 0
+    for _, e in ipairs(State.scanResults.allRemotes) do
+        if e.isSuspicious then firewallRemote(e); n+=1 end
     end
-end
+    log("OK","Firewalled "..n.." suspicious remotes.")
+end)
 
--- ─── FIREWALL ────────────────────────────────────────────────────────────────
+btnSelExec.MouseButton1Click:Connect(function()
+    if not State.selectedRemote then
+        log("WARN","No remote selected — click ▶ on a result row first.")
+    else executePayload() end
+end)
 
--- Neuters a suspicious remote by absorbing all calls and detaching it from the tree
-local function firewallRemote(entry)
-    local remote = entry.instance
+btnExecute.MouseButton1Click:Connect(function() executePayload() end)
+btnTestFire.MouseButton1Click:Connect(function()
+    PayloadBox.Text = 'print("SS Scanner test fire — "..tostring(os.clock()))'
+    executePayload()
+end)
+btnClearPay.MouseButton1Click:Connect(function()
+    PayloadBox.Text = ""
+    ExecResultLabel.Text = "Last result: —"
+    ExecResultLabel.TextColor3 = T.TXT_MUT
+end)
 
-    if remote:IsA("RemoteEvent") then
-        local ok, err = pcall(function()
-            remote.OnServerEvent:Connect(function() end)
-            remote.Parent = nil
-        end)
-        if ok then
-            log("OK", "Firewalled RemoteEvent: " .. entry.path)
-        else
-            log("WARN", "Could not firewall '" .. entry.path .. "': " .. tostring(err))
-        end
-
-    elseif remote:IsA("RemoteFunction") then
-        local ok, err = pcall(function()
-            remote.OnServerInvoke = function() return nil end
-            remote.Parent = nil
-        end)
-        if ok then
-            log("OK", "Firewalled RemoteFunction: " .. entry.path)
-        else
-            log("WARN", "Could not firewall '" .. entry.path .. "': " .. tostring(err))
-        end
+btnFWAllSusp.MouseButton1Click:Connect(function()
+    local n = 0
+    for _, e in ipairs(State.scanResults.allRemotes) do
+        if e.isSuspicious then firewallRemote(e); n+=1 end
     end
-end
+    log("OK","Firewalled "..n.." suspicious remotes.")
+end)
+btnFWRestore.MouseButton1Click:Connect(function()
+    log("WARN","Restore is not possible once remotes are detached (Parent=nil). Re-run Scan to rediscover.")
+end)
+btnFWClearLog.MouseButton1Click:Connect(function()
+    FWList:ClearAllChildren(); listLayout(FWList, 3)
+    State.firewalled = {}; log("SYS","Firewall log cleared.")
+end)
 
--- ─── REPORT ──────────────────────────────────────────────────────────────────
+-- ════════════════════════════════════════════════════════════════════════════
+-- SECTION 20 — STARTUP
+-- ════════════════════════════════════════════════════════════════════════════
 
-local function printReport()
-    local sep = string.rep("-", 60)
-    print("\n" .. sep)
-    print(LOG_PREFIX .. " SCAN REPORT")
-    print(sep)
+switchTab("Scanner")
 
-    local suspiciousCount = 0
-    for _, r in ipairs(ScanResults.allRemotes) do
-        if r.isSuspicious then suspiciousCount += 1 end
-    end
+-- Open animation
+MainFrame.Size     = UDim2.new(0,0,0,0)
+MainFrame.Position = UDim2.new(0.5,0,0.5,0)
+TweenService:Create(MainFrame, TweenInfo.new(0.38,Enum.EasingStyle.Back,Enum.EasingDirection.Out), {
+    Size     = UDim2.new(0,750,0,510),
+    Position = UDim2.new(0.5,-375,0.5,-255),
+}):Play()
 
-    print(string.format("  Total remotes found:       %d", #ScanResults.allRemotes))
-    print(string.format("  Suspicious remotes:        %d", suspiciousCount))
-    print(string.format("  Flagged scripts:           %d", #ScanResults.suspiciousScripts))
-    print(sep)
-
-    if suspiciousCount > 0 then
-        print("  [!!] SUSPICIOUS REMOTES:")
-        for _, r in ipairs(ScanResults.allRemotes) do
-            if r.isSuspicious then
-                print(string.format("    [%s] %s  (keyword: '%s')", r.class, r.path, r.keyword))
-            end
-        end
-        print(sep)
-    end
-
-    if #ScanResults.suspiciousScripts > 0 then
-        print("  [!] FLAGGED SCRIPTS:")
-        for _, s in ipairs(ScanResults.suspiciousScripts) do
-            print(string.format("    %s  --  %s", s.path, table.concat(s.flags, ", ")))
-        end
-        print(sep)
-    end
-
-    if suspiciousCount == 0 and #ScanResults.suspiciousScripts == 0 then
-        print("  [OK] No obvious backdoors detected.")
-    end
-
-    print(sep .. "\n")
-end
-
--- ─── MAIN ────────────────────────────────────────────────────────────────────
-
-local function main()
-    log("INFO", "Starting deep backdoor scan...")
-
-    for _, service in ipairs(CONFIG.SCAN_SERVICES) do
-        local ok, err = pcall(scanService, service)
-        if not ok then
-            log("WARN", string.format("Failed to scan service '%s': %s", service.Name, tostring(err)))
-        end
-    end
-
-    printReport()
-
-    -- Optional: firewall all suspicious remotes automatically
-    if CONFIG.FIREWALL_MODE then
-        log("INFO", "FIREWALL_MODE enabled -- neutralising suspicious remotes...")
-        for _, entry in ipairs(ScanResults.allRemotes) do
-            if entry.isSuspicious then
-                firewallRemote(entry)
-            end
-        end
-    end
-
-    --[[
-        To execute a payload via the first suspicious remote found, uncomment:
-
-        for _, entry in ipairs(ScanResults.allRemotes) do
-            if entry.isSuspicious then
-                executeViaRemote(entry.instance, "print('payload executed')")
-                break
-            end
-        end
-    --]]
-
-    log("INFO", "Scan complete.")
-    return ScanResults
-end
-
-return main()
+task.delay(0.42, function()
+    startMonitor()
+    log("SYS", "SS Backdoor Scanner v"..CONFIG.VERSION.." ready.")
+    log("INFO","Click  ⚡ Scan Now  to begin. Live monitor is active.")
+end)
