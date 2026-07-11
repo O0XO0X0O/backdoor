@@ -40,59 +40,32 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 -- ════════════════════════════════════════════════════════════════════════════
 
 local CONFIG = {
-    VERSION = "3.0.0",
+    VERSION = "2.0.0",
 
-    -- ── Remote name heuristics ────────────────────────────────────────────
-    -- Covers known backdoor names + camouflage names seen in leaked models (2024)
+    -- Remote names containing any of these keywords are flagged
     SUSPICIOUS_NAMES = {
-        -- Classic direct names
         "backdoor", "bd", "cmd", "exec", "execute", "run", "eval",
         "load", "sys", "shell", "admin_cmd", "remote_exec", "btools",
         "kill", "exploit", "hack", "inject", "bypass", "script_exec",
         "server_cmd", "luaexec", "loadscript", "remoteexploit", "rce",
-        "getscript", "remotecmd", "execscript",
-        -- Known camouflage names seen in free models / plugins (2023-2025)
-        "vaccine", "pose", "skybox", "manager", "handler", "controller",
-        "event", "action", "trigger", "signal", "dispatch", "package",
-        "core_sys", "effect_mgr", "lighting_ctrl", "pose_texture",
+        "getscript", "remotecmd",
     },
 
-    -- ── Script source pattern analysis ────────────────────────────────────
+    -- Script source patterns that indicate potentially dangerous code
     DANGEROUS_PATTERNS = {
-        -- RCE
-        { pattern = "loadstring%s*%(",          label = "loadstring()",           severity = "CRIT" },
-        { pattern = "getfenv%s*%(",             label = "getfenv()",              severity = "WARN" },
-        { pattern = "setfenv%s*%(",             label = "setfenv()",              severity = "WARN" },
-        -- HTTP fetching
-        { pattern = "HttpService",              label = "HttpService",            severity = "WARN" },
-        { pattern = "GetAsync%s*%(",            label = "GetAsync() fetch",       severity = "WARN" },
-        { pattern = "PostAsync%s*%(",           label = "PostAsync() post",       severity = "WARN" },
-        { pattern = "game%.HttpGet",            label = "game:HttpGet",           severity = "WARN" },
-        { pattern = "game:HttpGetAsync",        label = "game:HttpGetAsync",      severity = "WARN" },
-        -- Dynamic require with numeric asset ID
-        { pattern = "require%s*%(%s*%d+%s*%)",  label = "require(AssetID)",       severity = "CRIT" },
-        { pattern = "require%s*%(",             label = "require()",              severity = "INFO" },
-        -- Global table abuse
-        { pattern = "_G%s*%[",                  label = "_G[] write",             severity = "WARN" },
-        { pattern = "shared%s*%[",              label = "shared[] write",         severity = "WARN" },
-        { pattern = "getgenv%s*%()",            label = "getgenv()",              severity = "CRIT" },
-        -- Exploit-specific APIs
-        { pattern = "syn%.request",             label = "syn.request()",          severity = "CRIT" },
-        { pattern = "hookfunction",             label = "hookfunction()",         severity = "CRIT" },
-        { pattern = "newcclosure",              label = "newcclosure()",          severity = "CRIT" },
-        { pattern = "getcustomasset",           label = "getcustomasset()",       severity = "WARN" },
-        { pattern = "readfile",                 label = "readfile()",             severity = "WARN" },
-        { pattern = "writefile",                label = "writefile()",            severity = "WARN" },
-        -- Obfuscation tells
-        { pattern = "base64",                   label = "base64 encoding",        severity = "WARN" },
-        { pattern = "string%.char%s*%(",        label = "string.char() encode",   severity = "WARN" },
-        { pattern = "string%.byte%s*%(",        label = "string.byte() decode",   severity = "WARN" },
-        { pattern = "tonumber%s*%(.+,%s*16",    label = "hex decode",             severity = "WARN" },
-        -- Metatable hooking (advanced backdoors)
-        { pattern = "getmetatable%s*%(",        label = "getmetatable()",         severity = "WARN" },
-        { pattern = "rawset%s*%(",              label = "rawset()",               severity = "INFO" },
+        { pattern = "loadstring%s*%(",  label = "loadstring()",    severity = "CRIT" },
+        { pattern = "getfenv%s*%(",     label = "getfenv()",       severity = "WARN" },
+        { pattern = "setfenv%s*%(",     label = "setfenv()",       severity = "WARN" },
+        { pattern = "require%s*%(",     label = "require()",       severity = "INFO" },
+        { pattern = "HttpService",      label = "HttpService",     severity = "WARN" },
+        { pattern = "game%.HttpGet",    label = "game:HttpGet",    severity = "WARN" },
+        { pattern = "_G%s*%[",          label = "_G[] abuse",      severity = "WARN" },
+        { pattern = "shared%s*%[",      label = "shared[] abuse",  severity = "WARN" },
+        { pattern = "getgenv",          label = "getgenv()",       severity = "CRIT" },
+        { pattern = "syn%.request",     label = "syn.request()",   severity = "CRIT" },
     },
 
+    -- Services scanned recursively
     SCAN_SERVICES = {
         "Workspace", "ReplicatedStorage", "ReplicatedFirst",
         "ServerStorage", "ServerScriptService", "StarterGui",
@@ -100,19 +73,12 @@ local CONFIG = {
         "Teams", "SoundService", "Chat",
     },
 
-    SCAN_SCRIPTS       = true,   -- scan Script/LocalScript/ModuleScript .Source
-    SCAN_ATTRIBUTES    = true,   -- scan Instance Attributes for asset IDs / URLs
-    SCAN_STRING_VALUES = true,   -- scan StringValue instances for hidden IDs/URLs
-    SCAN_OBFUSCATION   = true,   -- flag scripts with high-entropy / long single lines
-    VERBOSE            = true,   -- show all remotes, not just suspicious
-    FIREWALL_MODE      = false,  -- auto-firewall suspicious on scan
-    LIVE_MONITOR       = true,   -- watch for new remotes at runtime
-    MAX_EXEC_HISTORY   = 10,
-    INVOKE_TIMEOUT     = 5,
-
-    -- Obfuscation thresholds
-    ENTROPY_LINE_LEN   = 300,    -- lines longer than this → flagged obfuscated
-    ENTROPY_MIN_RATIO  = 0.85,   -- ratio of non-alpha chars that triggers entropy flag
+    SCAN_SCRIPTS     = true,   -- scan Script/LocalScript/ModuleScript sources
+    VERBOSE          = true,   -- show all remotes, not just suspicious
+    FIREWALL_MODE    = false,  -- auto-firewall suspicious on scan
+    LIVE_MONITOR     = true,   -- watch for new remotes at runtime
+    MAX_EXEC_HISTORY = 10,     -- max entries in execution history
+    INVOKE_TIMEOUT   = 5,      -- seconds before InvokeServer gives up
 }
 
 -- ════════════════════════════════════════════════════════════════════════════
